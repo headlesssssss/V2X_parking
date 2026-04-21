@@ -1,0 +1,24 @@
+{
+  "header": {
+    "protocol_version": 1,
+    "message_type": "DENM",
+    "station_id": "RSU_ZONE_A",
+    "timestamp": "2025-04-10T14:32:05.456Z",
+    "sequence_number": 42
+  },
+  "management": {
+    "action_id": "RSU_ZONE_A_42",
+    "detection_time": "2025-04-10T14:32:05.456Z",
+    "validity_duration": 30
+  },
+  "situation": {
+    "cause_code": 91,
+    "sub_cause_code": 1,
+    "description": "Sensor timeout — no echo received"
+  },
+  "location": {
+    "space_id": "A3",
+    "zone": "ZONE_A"
+  },
+  "severity": "WARNING"
+}
