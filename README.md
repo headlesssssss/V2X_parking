@@ -1,6 +1,6 @@
 Fichiers de détection d'anomalies
 
-1. dataset_parking.csv
+1. dataset_parking.csv (Suprimmée avec le mock RSU vu qu'elle est inutile maintenant)
 Chemin : mock_rsu\dataset_parking.csv
 Rôle : C'est la matière première. Le Mock RSU a généré 5000 lignes de mesures labelisées représentant le comportement réel des capteurs HC-SR04 sur la maquette. Chaque ligne contient timestamp, place_id, distance_cm, est_anomalie. C'est ce fichier qui a servi à entraîner le modèle.
 
