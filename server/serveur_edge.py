@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import os
 
 # --- CONFIGURATION MQTT GLOBALE ---
-MQTT_BROKER = "broker.hivemq.com"
+MQTT_BROKER = "localhost" # change to local broker
 MQTT_PORT = 1883
 MQTT_TOPIC = "pfa/smartparking/rsu01"
 
@@ -145,6 +145,30 @@ class ServeurEdge:
             print(f"⚠️ ANOMALIE DÉTECTÉE - Spot {spot_id}: dist={distance:.1f}cm, votes={resultat['votes']}/3 (Z:{resultat['zscore']} | IF:{resultat['isolation_forest']} | Rules:{resultat['business_rules']})")
         
         return resultat
+    
+    def sauvegarder_etat_direct(self):
+        """Exporte l'état actuel pour que le Dashboard Web puisse le lire"""
+        chemin_fichier = "etat_parking.json"
+        
+        donnees_export = {
+            "derniere_mise_a_jour": datetime.now(timezone.utc).isoformat(),
+            "places": self.etat_places
+        }
+        
+        # 'w' écrase le fichier à chaque fois pour n'avoir que le temps réel
+        with open(chemin_fichier, 'w', encoding='utf-8') as f:
+            json.dump(donnees_export, f, indent=4)
+
+    def log_evenement(self, type_event, spot_id, detail):
+        """Ajoute une ligne de log dans l'historique"""
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": type_event,
+            "spot_id": spot_id,
+            "details": detail
+        }
+        with open("historique.jsonl", 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_entry) + '\n')
 
     def traiter_cpm(self, payload_json):
         try:
@@ -174,6 +198,8 @@ class ServeurEdge:
                             resultat_anomalie = self.analyser_anomalies(spot_id, distance)
                             if resultat_anomalie["anomalie"]:
                                 anomalies_detectees.append(spot_id)
+                                # L'enregistrement de l'anomalie dans l'historique se fait ici
+                                self.log_evenement("ANOMALIE", spot_id, f"Distance aberrante: {distance}cm")
                         break 
             
             places_libres = [k for k, v in self.etat_places.items() if v == "FREE"]
@@ -182,7 +208,8 @@ class ServeurEdge:
             print(f"\n🔄 LDM: Libres: {places_libres} | Occupées: {places_occupees}")
             if anomalies_detectees:
                 print(f"   🚨 Anomalies ignorées par le système sur les places : {anomalies_detectees}")
-            
+
+            self.sauvegarder_etat_direct()
         except Exception as e:
             print(f"❌ Erreur MQTT JSON : {e}")
 
