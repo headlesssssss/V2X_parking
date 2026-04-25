@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 import os
 
 # --- CONFIGURATION MQTT GLOBALE ---
-MQTT_BROKER = "broker.hivemq.com"
+# Configuré sur "localhost" pour ton routeur local
+MQTT_BROKER = "localhost" 
 MQTT_PORT = 1883
 MQTT_TOPIC = "pfa/smartparking/rsu01"
 
@@ -24,7 +25,6 @@ class ServeurEdge:
         # 1. Détection automatique de TOUTES les places via la grille
         for ligne in self.config["grid"]:
             for cellule in ligne:
-                # Tout nombre >= 10 (sauf 99) est une place
                 if cellule >= 10 and cellule != 99:
                     self.etat_places[cellule] = "UNAVAILABLE"
                     
@@ -38,7 +38,6 @@ class ServeurEdge:
         self.historiques = {}
         self.modele_if = None
         
-        # Charge le modèle ML si disponible
         if model_path is None:
             model_path = os.path.join(os.path.dirname(__file__), "isolation_forest.pkl")
         
@@ -49,10 +48,10 @@ class ServeurEdge:
             except Exception as e:
                 print(f"⚠️ Impossible de charger le modèle ML : {e}")
         else:
-            print(f"⚠️ Modèle ML non trouvé : {model_path} (L'inférence sera ignorée)")
+            print(f"⚠️ Modèle ML non trouvé : {model_path}")
                 
         print(f"✅ Configuration chargée: {self.metadata['name']}")
-        print(f"🚗 Nombre total de places : {len(self.etat_places)} | 📡 Équipées : {len(self.spots_mapping)}")
+        print(f"🚗 Places totales : {len(self.etat_places)} | 📡 Équipées : {len(self.spots_mapping)}")
 
     def get_historique(self, place_id):
         if place_id not in self.historiques:
@@ -69,94 +68,67 @@ class ServeurEdge:
 
     def check_zscore(self, distance, place_id, seuil=3.0):
         h = self.get_historique(place_id)
-        if len(h["distances"]) < 10:
-            return False
+        if len(h["distances"]) < 10: return False
         historique = list(h["distances"])
-        moyenne = np.mean(historique)
-        ecart   = np.std(historique)
-        if ecart == 0:
-            return True
-        z = abs((float(distance) - moyenne) / ecart)
-        return z > seuil
+        moyenne, ecart = np.mean(historique), np.std(historique)
+        if ecart == 0: return True
+        return abs((float(distance) - moyenne) / ecart) > seuil
 
     def check_isolation_forest(self, distance, place_id):
-        if self.modele_if is None:
-            return False
-        
+        if self.modele_if is None: return False
         h = self.get_historique(place_id)
         distances = list(h["distances"])
-        
         f1 = float(distance)
-        window = distances[-10:] + [float(distance)]
+        window = distances[-10:] + [f1]
         f2 = float(np.std(window)) if len(window) > 1 else 0.0
-        f3 = abs(float(distance) - distances[-1]) if len(distances) > 0 else 0.0
-        
+        f3 = abs(f1 - distances[-1]) if len(distances) > 0 else 0.0
         try:
-            prediction = self.modele_if.predict([[f1, f2, f3]])[0]
-            return prediction == -1
-        except Exception as e:
-            return False
+            return self.modele_if.predict([[f1, f2, f3]])[0] == -1
+        except: return False
 
-    def check_business_rules(self, distance, place_id, frozen_min=10, frozen_seconds=10):
+    def check_business_rules(self, distance, place_id):
         h = self.get_historique(place_id)
-        distances  = list(h["distances"])
-        timestamps = list(h["timestamps"])
-        distance = float(distance)
-
-        # Règle 1 : Distance impossible pour un HC-SR04 dans notre contexte Wokwi (en cm)
-        if distance < 2.0 or distance > 20.0:
-            return True
-
-        # Règle 2 : Oscillation brutale (saut de plus de 50 cm d'un coup)
-        if len(distances) >= 2:
-            delta = abs(distance - distances[-2])
-            if delta > 50.0:
-                return True
-
-        # Règle 3 : Valeur figée (capteur bloqué)
-        if len(distances) >= frozen_min:
-            derniers = distances[-frozen_min:]
-            if max(derniers) - min(derniers) < 0.05:
-                if len(timestamps) >= frozen_min:
-                    duree = (timestamps[-1] - timestamps[-frozen_min]).total_seconds()
-                    if duree >= frozen_seconds:
-                        return True
-
+        distances = list(h["distances"])
+        dist = float(distance)
+        if dist < 2.0 or dist > 20.0: return True # Seuil spécifique HC-SR04
+        if len(distances) >= 2 and abs(dist - distances[-2]) > 50.0: return True
         return False
 
     def vote_majoritaire(self, distance, place_id):
-        r1 = self.check_zscore(distance=distance, place_id=place_id)
-        r2 = self.check_isolation_forest(distance=distance, place_id=place_id)
-        r3 = self.check_business_rules(distance=distance, place_id=place_id)
-        votes = sum([r1, r2, r3])
-        return {
-            "anomalie":         votes >= 2,
-            "votes":            votes,
-            "zscore":           r1,
-            "isolation_forest": r2,
-            "business_rules":   r3,
-        }
+        r1 = self.check_zscore(distance, place_id)
+        r2 = self.check_isolation_forest(distance, place_id)
+        r3 = self.check_business_rules(distance, place_id)
+        return {"anomalie": (sum([r1, r2, r3]) >= 2), "votes": sum([r1, r2, r3])}
 
     def analyser_anomalies(self, spot_id, distance):
         self.ajouter_mesure(spot_id, distance)
-        resultat = self.vote_majoritaire(distance, spot_id)
-        
-        if resultat["anomalie"]:
-            print(f"⚠️ ANOMALIE DÉTECTÉE - Spot {spot_id}: dist={distance:.1f}cm, votes={resultat['votes']}/3 (Z:{resultat['zscore']} | IF:{resultat['isolation_forest']} | Rules:{resultat['business_rules']})")
-        
-        return resultat
+        return self.vote_majoritaire(distance, spot_id)
+    
+    def sauvegarder_etat_direct(self):
+        """Fichier JSON pour l'affichage temps réel du Dashboard"""
+        donnees = {
+            "derniere_mise_a_jour": datetime.now(timezone.utc).isoformat(),
+            "places": self.etat_places
+        }
+        with open("etat_parking.json", 'w', encoding='utf-8') as f:
+            json.dump(donnees, f, indent=4)
+
+    def log_evenement(self, type_event, spot_id, detail):
+        """Fichier JSONL pour l'historique long terme et réentraînement IA"""
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": type_event,
+            "spot_id": spot_id,
+            "details": detail
+        }
+        with open("historique.jsonl", 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_entry) + '\n')
 
     def traiter_cpm(self, payload_json):
         try:
             data = json.loads(payload_json)
             places_array = data.get("places", [])
             distances_array = data.get("distances", [])
-            
-            # FALLBACK WOKWI : Si l'ESP32 n'envoie pas encore le tableau "distances"
-            if not distances_array and places_array:
-                # On simule une distance cohérente pour faire tourner les algorithmes
-                distances_array = [8.0 if etat == 1 else 40.0 for etat in places_array]
-
             anomalies_detectees = []
             
             for index, etat in enumerate(places_array):
@@ -166,51 +138,44 @@ class ServeurEdge:
                 for spot_id_str, map_data in self.spots_mapping.items():
                     if map_data["hardware_id"] == hardware_id:
                         spot_id = int(spot_id_str)
+                        
+                        # Détection du changement d'état pour l'historique
+                        etat_precedent = self.etat_places.get(spot_id)
                         self.etat_places[spot_id] = status
                         
-                        # Analyse IA des distances
+                        if etat_precedent != status and etat_precedent not in ["UNKNOWN", "UNAVAILABLE"]:
+                            self.log_evenement("CHANGEMENT_ETAT", spot_id, f"Passage à {status}")
+                        
+                        # Analyse IA
                         if distances_array and index < len(distances_array):
-                            distance = float(distances_array[index])
-                            resultat_anomalie = self.analyser_anomalies(spot_id, distance)
-                            if resultat_anomalie["anomalie"]:
+                            dist = float(distances_array[index])
+                            res = self.analyser_anomalies(spot_id, dist)
+                            if res["anomalie"]:
                                 anomalies_detectees.append(spot_id)
+                                self.log_evenement("ANOMALIE", spot_id, f"Distance: {dist}cm (Votes:{res['votes']}/3)")
                         break 
             
-            places_libres = [k for k, v in self.etat_places.items() if v == "FREE"]
-            places_occupees = [k for k, v in self.etat_places.items() if v == "OCCUPIED"]
-            
-            print(f"\n🔄 LDM: Libres: {places_libres} | Occupées: {places_occupees}")
-            if anomalies_detectees:
-                print(f"   🚨 Anomalies ignorées par le système sur les places : {anomalies_detectees}")
+            self.sauvegarder_etat_direct()
+            print(f"🔄 Mise à jour : {len([v for v in self.etat_places.values() if v=='FREE'])} libres")
             
         except Exception as e:
-            print(f"❌ Erreur MQTT JSON : {e}")
+            print(f"❌ Erreur : {e}")
 
-# --- LANCEMENT DU SCRIPT ---
+# --- LANCEMENT ---
 serveur = ServeurEdge('conf_parking.json')
 
-def on_message(client, userdata, msg):
-    if msg.topic == MQTT_TOPIC:
-        serveur.traiter_cpm(msg.payload.decode())
+def on_message(c, u, msg): serveur.traiter_cpm(msg.payload.decode())
+def on_connect(c, u, f, rc): 
+    if rc == 0: c.subscribe(MQTT_TOPIC)
+    print("✅ Connecté" if rc==0 else f"❌ Erreur {rc}")
 
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        print(f"✅ Connecté à {MQTT_BROKER}")
-        client.subscribe(MQTT_TOPIC)
-    else:
-        print(f"❌ Erreur, code {rc}")
-
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id="Serveur_Edge_Backend")
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "Edge_Backend")
 client.on_message = on_message
 client.on_connect = on_connect
 
-print(f"\n⏳ Connexion au Broker MQTT public ({MQTT_BROKER})...")
 try:
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    print(f"👂 Écoute sur {MQTT_TOPIC}...")
+    client.loop_forever()
 except Exception as e:
-    print(f"❌ Impossible de se connecter : {e}")
-    exit(1)
-
-print(f"👂 Serveur Edge en écoute sur : {MQTT_TOPIC}")
-print("=" * 70)
-client.loop_forever()
+    print(f"❌ Erreur connexion : {e}")
