@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="description" content="Parking Intelligent V2X — ENSA El Jadida">
+  <title>Parking V2X</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <span class="conn-indicator" id="conn-dot"></span>
+        <h1>Parking <span class="accent">V2X</span></h1>
+      </div>
+      <div class="stats" id="stats-bar">
+        <div class="stat" id="stat-free"><span class="stat-n">—</span><span class="stat-l">libres</span></div>
+        <div class="stat occupied" id="stat-occ"><span class="stat-n">—</span><span class="stat-l">occupées</span></div>
+        <div class="stat anomaly" id="stat-anom"><span class="stat-n">—</span><span class="stat-l">anomalies</span></div>
+        <button class="icon-btn" id="btn-sound" title="Notifications activées">🔔</button>
+        <a href="/qr" class="icon-btn" title="QR Code">⎚</a>
+        <a href="/3d" class="icon-btn" title="Vue 3D">3D</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Carte -->
+    <section class="section">
+      <div class="parking-wrapper">
+        <div id="parking-grid" class="grid"></div>
+      </div>
+      <div class="flow-hints"><span>← circulation</span><span>circulation →</span></div>
+    </section>
+
+    <!-- Guidage -->
+    <section class="section guidance">
+      <button id="btn-guide" class="btn">Trouver une place libre</button>
+      <div id="guide-panel" class="guide-panel" hidden>
+        <div class="guide-row"><span>Destination</span><strong id="guide-dest">—</strong></div>
+        <div class="guide-row"><span>Distance</span><strong id="guide-dist">—</strong></div>
+      </div>
+    </section>
+
+    <!-- Alertes -->
+    <section class="section">
+      <h2 class="section-title">Alertes <span class="badge" id="denm-badge" hidden>0</span></h2>
+      <div id="denm-list" class="alert-list"><p class="empty">Aucune alerte</p></div>
+    </section>
+
+    <!-- Log -->
+    <section class="section">
+      <h2 class="section-title">Activité</h2>
+      <div id="log-list" class="log-list"><p class="empty">En attente…</p></div>
+    </section>
+
+    <!-- Légende -->
+    <section class="section legend-section">
+      <div class="legend">
+        <span><i class="sw sw-free"></i>Libre</span>
+        <span><i class="sw sw-occ"></i>Occupée</span>
+        <span><i class="sw sw-anom"></i>Anomalie</span>
+        <span><i class="sw sw-path"></i>Chemin</span>
+        <span><i class="sw sw-dest"></i>Destination</span>
+        <span><i class="sw sw-sensor"></i>Capteur</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

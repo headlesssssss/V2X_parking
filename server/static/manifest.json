@@ -1,0 +1,35 @@
+{
+  "name": "Smart Parking V2X",
+  "short_name": "SmartParking",
+  "description": "Guidage parking intelligent V2X avec detection d'anomalies temps reel",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080d18",
+  "theme_color": "#6366f1",
+  "lang": "fr",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Trouver une place",
+      "short_name": "Guidage",
+      "url": "/?action=guidance",
+      "description": "Obtenir le guidage vers la place la plus proche"
+    }
+  ],
+  "categories": ["utilities", "navigation"]
+}
