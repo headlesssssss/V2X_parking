@@ -1,122 +1,127 @@
+from flask import Flask, render_template, jsonify
 import json
 import os
 import heapq
-from flask import Flask, render_template, jsonify
 
 app = Flask(__name__)
 
 # --- CONFIGURATION DES CHEMINS ---
-# On remonte d'un dossier (..) pour aller chercher les JSON dans ton dossier 'server'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SERVER_DIR = os.path.join(BASE_DIR, '..', 'server')
+# On remonte d'un dossier (..) pour entrer dans 'server'
+SERVER_DIR = os.path.join(BASE_DIR, '..', 'server') 
 CONF_PATH = os.path.join(SERVER_DIR, 'conf_parking.json')
 ETAT_PATH = os.path.join(SERVER_DIR, 'etat_parking.json')
 
-def load_json(filepath):
-    with open(filepath, 'r') as f:
-        return json.load(f)
+def load_json(path):
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
 
-# --- ALGORITHME A* (Recherche de chemin) ---
-def heuristic(a, b):
-    # Distance de Manhattan
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
+# --- ALGORITHME A* ---
 def a_star(grid, start, goal):
-    rows = len(grid)
-    cols = len(grid[0])
-    
-    frontier = []
-    heapq.heappush(frontier, (0, start))
-    came_from = {start: None}
-    cost_so_far = {start: 0}
+    rows, cols = len(grid), len(grid[0])
+    open_set = []
+    heapq.heappush(open_set, (0, start))
+    came_from = {}
+    g_score = {start: 0}
+    f_score = {start: abs(start[0]-goal[0]) + abs(start[1]-goal[1])}
 
-    while frontier:
-        current = heapq.heappop(frontier)[1]
+    while open_set:
+        current = heapq.heappop(open_set)[1]
 
         if current == goal:
-            break
+            path = []
+            while current in came_from:
+                path.append({"row": current[0], "col": current[1]})
+                current = came_from[current]
+            path.append({"row": start[0], "col": start[1]})
+            return path[::-1]
 
-        # Vérifier les 4 directions (Haut, Bas, Gauche, Droite)
-        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-            next_node = (current[0] + dx, current[1] + dy)
-            r, c = next_node
+        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            neighbor = (current[0] + dr, current[1] + dc)
+            
+            if 0 <= neighbor[0] < rows and 0 <= neighbor[1] < cols:
+                # Une case est franchissable si c'est de la route (0), 
+                # l'entrée (98) ou la place de destination (goal)
+                is_walkable = (grid[neighbor[0]][neighbor[1]] == 0 or 
+                               grid[neighbor[0]][neighbor[1]] == 98 or 
+                               neighbor == goal)
+                
+                if is_walkable:
+                    tentative_g_score = g_score[current] + 1
+                    if tentative_g_score < g_score.get(neighbor, float('inf')):
+                        came_from[neighbor] = current
+                        g_score[neighbor] = tentative_g_score
+                        f_score[neighbor] = tentative_g_score + abs(neighbor[0]-goal[0]) + abs(neighbor[1]-goal[1])
+                        heapq.heappush(open_set, (f_score[neighbor], neighbor))
+    return []
 
-            # Si on est dans les limites de la grille
-            if 0 <= r < rows and 0 <= c < cols:
-                val = grid[r][c]
-                # On ne peut marcher QUE sur la route (0), l'entrée (98), ou la place visée
-                if val == 0 or val == 98 or next_node == goal:
-                    new_cost = cost_so_far[current] + 1
-                    if next_node not in cost_so_far or new_cost < cost_so_far[next_node]:
-                        cost_so_far[next_node] = new_cost
-                        priority = new_cost + heuristic(goal, next_node)
-                        heapq.heappush(frontier, (priority, next_node))
-                        came_from[next_node] = current
-
-    # Reconstruire le chemin
-    path = []
-    if goal in came_from:
-        curr = goal
-        while curr != start:
-            path.append({"row": curr[0], "col": curr[1]})
-            curr = came_from[curr]
-        path.append({"row": start[0], "col": start[1]})
-        path.reverse()
-    
-    return path
-
-# --- ROUTES DE L'API WEB ---
+# --- ROUTES ---
 
 @app.route('/')
 def index():
-    # Sert la page HTML principale
     return render_template('index.html')
 
 @app.route('/api/data')
 def get_parking_data():
     try:
         conf = load_json(CONF_PATH)
-        etat = load_json(ETAT_PATH)
-        grid = conf['grid']
+        etat_complet = load_json(ETAT_PATH)
         
-        # 1. Trouver les coordonnées de l'entrée et des places
-        entry_coords = (conf['metadata']['entry_point']['row'], conf['metadata']['entry_point']['col'])
+        grid = conf.get('grid', [])
+        # On récupère le dictionnaire des places soit dans .places, soit à la racine
+        etat_places = etat_complet.get("places", etat_complet)
+        
+        if not grid:
+            return jsonify({"error": "Grille non trouvée dans conf_parking.json"}), 500
+
+        # 1. Localisation dynamique de l'entrée (98) et des places (10-90)
+        entry_coords = None
         spots_coords = {}
         
         for r in range(len(grid)):
             for c in range(len(grid[r])):
                 val = grid[r][c]
-                if 10 <= val <= 90 and val != 98 and val != 99:
+                if val == 98:
+                    entry_coords = (r, c)
+                elif 10 <= val <= 90 and val != 99:
                     spots_coords[str(val)] = (r, c)
 
-        # 2. Trouver la place libre la plus proche
-        free_spots = [spot for spot, status in etat.items() if status == "FREE"]
+        # Sécurité si 98 n'est pas dans la grille
+        if not entry_coords:
+            meta = conf.get('metadata', {}).get('entry_point', {"row": 0, "col": 0})
+            entry_coords = (meta['row'], meta['col'])
+
+        # 2. Recherche de la meilleure place libre
+        free_spots = [s for s, status in etat_places.items() if status == "FREE"]
         best_path = []
         best_spot = None
         
-        if free_spots:
-            shortest_distance = float('inf')
-            
-            for spot in free_spots:
-                if spot in spots_coords:
-                    goal = spots_coords[spot]
+        if free_spots and entry_coords:
+            shortest_len = float('inf')
+            for spot_id in free_spots:
+                if spot_id in spots_coords:
+                    goal = spots_coords[spot_id]
                     path = a_star(grid, entry_coords, goal)
                     
-                    if path and len(path) < shortest_distance:
-                        shortest_distance = len(path)
+                    if path and len(path) < shortest_len:
+                        shortest_len = len(path)
                         best_path = path
-                        best_spot = spot
-                        
+                        best_spot = spot_id
+        
         return jsonify({
             "grid": grid,
-            "status": etat,
+            "status": etat_places,
             "best_spot": best_spot,
-            "path": best_path
+            "path": best_path,
+            "metadata": conf.get('metadata', {})
         })
 
     except Exception as e:
+        print(f"❌ Erreur Serveur : {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Lance le serveur Web sur le port 5000
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Lance le serveur sur le port 5000
+    app.run(debug=True, port=5000)

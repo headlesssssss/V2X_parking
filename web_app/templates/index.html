@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Parking 3D</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Empêche le scroll */
+            background-color: #1a1a1a;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            border: 1px solid #333;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 1.5rem; }
+        .highlight { color: #4CAF50; font-weight: bold; font-size: 1.5em; }
+        .error { color: #f44336; font-weight: bold; font-size: 1.5em; }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="ui-container">
+        <h1>🚗 Smart Parking 3D</h1>
+        <p>Meilleure place : <br><span id="best-spot">Analyse en cours...</span></p>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- 1. INITIALISATION DE LA SCÈNE 3D ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Position initiale de la caméra (en hauteur et légèrement de biais)
+        camera.position.set(0, 25, 25); 
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Lumières
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // Variables globales pour la mise à jour
+        let isSceneBuilt = false;
+        const spotsMeshes = {}; // Pour stocker et modifier la couleur des places facilement
+        let pathLine = null;    // Pour stocker le tracé du chemin
+        const cellSize = 2;     // Taille d'une case en 3D
+
+        // --- 2. FONCTIONS DE CONSTRUCTION ---
+
+        function buildParking(grid) {
+            const rows = grid.length;
+            const cols = grid[0].length;
+            
+            // Calculer les offsets pour centrer le parking au milieu de l'écran
+            const offsetX = (cols * cellSize) / 2 - (cellSize / 2);
+            const offsetZ = (rows * cellSize) / 2 - (cellSize / 2);
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const val = grid[r][c];
+                    
+                    // Positions X (gauche/droite) et Z (profondeur)
+                    const posX = c * cellSize - offsetX;
+                    const posZ = r * cellSize - offsetZ;
+                    
+                    let geometry, material, height, posY;
+
+                    if (val === 1) {
+                        // Mur / Trottoir
+                        height = 1.5;
+                        geometry = new THREE.BoxGeometry(cellSize, height, cellSize);
+                        material = new THREE.MeshStandardMaterial({ color: 0x555555 });
+                        posY = height / 2;
+                    } else if (val === 0 || val === 98) {
+                        // Route ou Entrée
+                        height = 0.1;
+                        geometry = new THREE.BoxGeometry(cellSize, height, cellSize);
+                        material = new THREE.MeshStandardMaterial({ color: 0x333333 });
+                        posY = height / 2;
+                    } else if (val >= 10 && val <= 90) {
+                        // Place de parking (initialement grise)
+                        height = 0.2;
+                        geometry = new THREE.BoxGeometry(cellSize * 0.9, height, cellSize * 0.9);
+                        material = new THREE.MeshStandardMaterial({ color: 0x888888 });
+                        posY = height / 2;
+                    } else {
+                        continue; // Ignore les autres valeurs (comme 99)
+                    }
+
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.position.set(posX, posY, posZ);
+                    mesh.receiveShadow = true;
+                    if (val === 1) mesh.castShadow = true;
+                    
+                    scene.add(mesh);
+
+                    // Sauvegarder la référence des places pour changer leur couleur plus tard
+                    if (val >= 10 && val <= 90) {
+                        spotsMeshes[val] = mesh;
+                    }
+                }
+            }
+            isSceneBuilt = true;
+        }
+
+        function drawPath(pathArray, grid) {
+            // Supprimer l'ancien chemin s'il existe
+            if (pathLine) {
+                scene.remove(pathLine);
+                pathLine = null;
+            }
+
+            if (!pathArray || pathArray.length === 0) return;
+
+            const rows = grid.length;
+            const cols = grid[0].length;
+            const offsetX = (cols * cellSize) / 2 - (cellSize / 2);
+            const offsetZ = (rows * cellSize) / 2 - (cellSize / 2);
+
+            const points = [];
+            pathArray.forEach(coord => {
+                const posX = coord.col * cellSize - offsetX;
+                const posZ = coord.row * cellSize - offsetZ;
+                // On surélève un peu le chemin pour qu'il flotte au-dessus du sol (Y = 1.0)
+                points.push(new THREE.Vector3(posX, 1.0, posZ));
+            });
+
+            // Création d'une ligne brillante
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({ 
+                color: 0x00d2ff, 
+                linewidth: 3 // Note: linewidth n'est supporté que sur certains navigateurs (WebGL)
+            });
+            
+            pathLine = new THREE.Line(geometry, material);
+            scene.add(pathLine);
+        }
+
+        // --- 3. COMMUNICATION AVEC L'API ---
+
+        async function fetchParkingData() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+
+                // 3.1 Construire la scène la première fois
+                if (!isSceneBuilt && data.grid) {
+                    buildParking(data.grid);
+                }
+
+                // 3.2 Mettre à jour l'UI
+                const spotElement = document.getElementById('best-spot');
+                if (data.best_spot) {
+                    spotElement.className = "highlight";
+                    spotElement.innerText = "N° " + data.best_spot;
+                } else {
+                    spotElement.className = "error";
+                    spotElement.innerText = "Complet";
+                }
+
+                // 3.3 Mettre à jour la couleur des places 3D
+                if (data.status) {
+                    for (const [spotId, status] of Object.entries(data.status)) {
+                        const mesh = spotsMeshes[spotId];
+                        if (mesh) {
+                            if (status === "FREE") {
+                                mesh.material.color.setHex(0x4CAF50); // Vert
+                            } else if (status === "OCCUPIED") {
+                                mesh.material.color.setHex(0xf44336); // Rouge
+                            } else {
+                                mesh.material.color.setHex(0x555555); // Gris foncé (UNAVAILABLE)
+                            }
+                        }
+                    }
+                }
+
+                // 3.4 Dessiner le chemin A*
+                if (data.path && data.grid) {
+                    drawPath(data.path, data.grid);
+                }
+
+            } catch (error) {
+                console.error("Erreur API :", error);
+            }
+        }
+
+        // --- 4. BOUCLE D'ANIMATION ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update(); // Requis si damping est activé
+            renderer.render(scene, camera);
+        }
+
+        // --- 5. GESTION DU REDIMENSIONNEMENT ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Lancement
+        animate();
+        fetchParkingData();
+        setInterval(fetchParkingData, 2000); // Mise à jour toutes les 2 secondes
+
+    </script>
+</body>
+</html>
