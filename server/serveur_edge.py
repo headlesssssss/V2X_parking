@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 import os
 
 # --- CONFIGURATION MQTT GLOBALE ---
-# Configuré sur "localhost" pour ton routeur local
 MQTT_BROKER = "localhost" 
 MQTT_PORT = 1883
 MQTT_TOPIC = "pfa/smartparking/rsu01"
@@ -25,7 +24,8 @@ class ServeurEdge:
         # 1. Détection automatique de TOUTES les places via la grille
         for ligne in self.config["grid"]:
             for cellule in ligne:
-                if cellule >= 10 and cellule != 99:
+                # CORRECTION : On cible les IDs de 10 à 90, en excluant 98 et 99
+                if 10 <= cellule <= 90 and cellule != 98 and cellule != 99:
                     self.etat_places[cellule] = "UNAVAILABLE"
                     
         # 2. Initialisation des places équipées
@@ -90,7 +90,7 @@ class ServeurEdge:
         h = self.get_historique(place_id)
         distances = list(h["distances"])
         dist = float(distance)
-        if dist < 2.0 or dist > 20.0: return True # Seuil spécifique HC-SR04
+        if dist < 2.0 or dist > 20.0: return True
         if len(distances) >= 2 and abs(dist - distances[-2]) > 50.0: return True
         return False
 
@@ -105,7 +105,6 @@ class ServeurEdge:
         return self.vote_majoritaire(distance, spot_id)
     
     def sauvegarder_etat_direct(self):
-        """Fichier JSON pour l'affichage temps réel du Dashboard"""
         donnees = {
             "derniere_mise_a_jour": datetime.now(timezone.utc).isoformat(),
             "places": self.etat_places
@@ -114,7 +113,6 @@ class ServeurEdge:
             json.dump(donnees, f, indent=4)
 
     def log_evenement(self, type_event, spot_id, detail):
-        """Fichier JSONL pour l'historique long terme et réentraînement IA"""
         log_entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": type_event,
@@ -139,14 +137,12 @@ class ServeurEdge:
                     if map_data["hardware_id"] == hardware_id:
                         spot_id = int(spot_id_str)
                         
-                        # Détection du changement d'état pour l'historique
                         etat_precedent = self.etat_places.get(spot_id)
                         self.etat_places[spot_id] = status
                         
                         if etat_precedent != status and etat_precedent not in ["UNKNOWN", "UNAVAILABLE"]:
                             self.log_evenement("CHANGEMENT_ETAT", spot_id, f"Passage à {status}")
                         
-                        # Analyse IA
                         if distances_array and index < len(distances_array):
                             dist = float(distances_array[index])
                             res = self.analyser_anomalies(spot_id, dist)
