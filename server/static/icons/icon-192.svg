@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="36" fill="#080d18"/>
+  <rect x="12" y="12" width="168" height="168" rx="24" fill="#6366f1" opacity=".15"/>
+  <text x="96" y="130" font-family="system-ui,sans-serif" font-weight="900"
+        font-size="110" text-anchor="middle" fill="#6366f1">P</text>
+  <circle cx="152" cy="48" r="18" fill="#22d46e"/>
+  <text x="152" y="54" font-family="system-ui,sans-serif" font-weight="800"
+        font-size="16" text-anchor="middle" fill="#080d18">V2X</text>
+</svg>

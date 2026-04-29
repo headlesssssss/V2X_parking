@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parking V2X — Vue 3D</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --font: 'Inter', system-ui, sans-serif; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #09090b; color: #fafafa; font-family: var(--font); overflow: hidden; }
+    canvas { display: block; }
+
+    /* HUD overlay */
+    .hud { position: fixed; top: 0; left: 0; right: 0; padding: 16px 20px; display: flex;
+           justify-content: space-between; align-items: center; z-index: 10;
+           background: linear-gradient(180deg, rgba(9,9,11,.9) 0%, transparent 100%); pointer-events: none; }
+    .hud > * { pointer-events: auto; }
+    .hud h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: -.02em; }
+    .hud h1 span { color: #0a84ff; }
+    .hud-stats { display: flex; gap: 8px; }
+    .chip { padding: 5px 12px; border-radius: 100px; font-size: .75rem; font-weight: 600;
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    .chip-free { background: rgba(48,209,88,.15); color: #30d158; border: 1px solid rgba(48,209,88,.3); }
+    .chip-occ  { background: rgba(255,69,58,.15); color: #ff453a; border: 1px solid rgba(255,69,58,.3); }
+
+    /* Bottom panel */
+    .panel { position: fixed; bottom: 0; left: 0; right: 0; padding: 16px 20px; z-index: 10;
+             background: linear-gradient(0deg, rgba(9,9,11,.95) 0%, transparent 100%); pointer-events: none; }
+    .panel > * { pointer-events: auto; }
+    .panel-inner { max-width: 500px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+    .guide-box { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+                 border-radius: 12px; padding: 12px 16px; display: flex; justify-content: space-between;
+                 font-size: .85rem; backdrop-filter: blur(12px); }
+    .guide-box span { color: #a1a1aa; }
+    .guide-box strong { color: #fafafa; }
+
+    .btn-row { display: flex; gap: 8px; }
+    .btn-3d { flex: 1; padding: 12px; border: none; border-radius: 100px; font-family: var(--font);
+              font-size: .85rem; font-weight: 600; cursor: pointer; transition: all .2s; }
+    .btn-3d:active { transform: scale(.97); }
+    .btn-guide { background: #fafafa; color: #09090b; }
+    .btn-back { background: rgba(255,255,255,.1); color: #fafafa; border: 1px solid rgba(255,255,255,.15); }
+    .btn-back:hover { background: rgba(255,255,255,.15); }
+
+    /* Toast */
+    .toast-3d { position: fixed; top: 70px; left: 50%; transform: translateX(-50%) translateY(-20px);
+                background: #30d158; color: #fff; padding: 10px 20px; border-radius: 100px;
+                font-size: .85rem; font-weight: 600; font-family: var(--font);
+                box-shadow: 0 4px 20px rgba(48,209,88,.3); opacity: 0; transition: all .3s; z-index: 999; }
+    .toast-3d.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    .hint { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+            color: rgba(255,255,255,.3); font-size: .7rem; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <!-- HUD -->
+  <div class="hud">
+    <h1>Parking <span>V2X</span> — 3D</h1>
+    <div class="hud-stats">
+      <div class="chip chip-free" id="s-free">— libres</div>
+      <div class="chip chip-occ" id="s-occ">— occupées</div>
+    </div>
+  </div>
+
+  <!-- Bottom -->
+  <div class="panel">
+    <div class="panel-inner">
+      <div class="guide-box" id="guide-box" style="display:none">
+        <div><span>Destination</span></div>
+        <div><strong id="g-dest">—</strong></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn-3d btn-guide" id="btn-find">Trouver une place libre</button>
+        <a href="/" class="btn-3d btn-back">Vue 2D</a>
+      </div>
+    </div>
+  </div>
+
+  <p class="hint">Glisser pour tourner · Pincer pour zoomer</p>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+  <script>
+  (function() {
+    'use strict';
+
+    // ── Config ───────────────────────────────────
+    const COLORS = {
+      free:     0x30d158, occupied:  0xff453a, anomaly:  0xff9f0a,
+      wall:     0x1a1a1f, road:      0x222228, entry:    0x0d3320,
+      hall:     0x1a0d38, path:      0x0a84ff, dest:     0xbf5af2,
+      ground:   0x111114, line:      0x3f3f46,
+    };
+    const CELL = 1.2;  // taille d'une cellule
+    const WALL_H = 0.6;
+    const SPOT_H = 0.08;
+    const PATH_H = 0.04;
+
+    let scene, camera, renderer, controls;
+    let grid = [], spots = {}, meshSpots = {}, meshPaths = [], meshDest = null;
+    let prevSnap = {};
+
+    // ── Three.js Setup ───────────────────────────
+    function initScene() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x09090b);
+      scene.fog = new THREE.Fog(0x09090b, 20, 45);
+
+      camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+      camera.position.set(0, 12, 10);
+      camera.lookAt(0, 0, 0);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      document.body.appendChild(renderer.domElement);
+
+      // Lights
+      const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+      scene.add(ambient);
+
+      const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+      dir.position.set(8, 12, 4);
+      dir.castShadow = true;
+      dir.shadow.mapSize.set(1024, 1024);
+      scene.add(dir);
+
+      const point = new THREE.PointLight(0x0a84ff, 0.3, 20);
+      point.position.set(0, 5, 0);
+      scene.add(point);
+
+      // Simple orbit controls (manual)
+      initControls();
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    }
+
+    // ── Manual Orbit Controls ────────────────────
+    let isDragging = false, prevMouse = {x:0, y:0};
+    let camTheta = -0.4, camPhi = 0.9, camDist = 15;
+    let camTarget = new THREE.Vector3(0, 0, 0);
+
+    function initControls() {
+      const el = renderer.domElement;
+
+      el.addEventListener('pointerdown', e => { isDragging = true; prevMouse = {x:e.clientX, y:e.clientY}; });
+      el.addEventListener('pointermove', e => {
+        if (!isDragging) return;
+        const dx = e.clientX - prevMouse.x, dy = e.clientY - prevMouse.y;
+        camTheta -= dx * 0.008;
+        camPhi = Math.max(0.2, Math.min(1.5, camPhi - dy * 0.008));
+        prevMouse = {x:e.clientX, y:e.clientY};
+      });
+      el.addEventListener('pointerup', () => isDragging = false);
+      el.addEventListener('pointerleave', () => isDragging = false);
+      el.addEventListener('wheel', e => {
+        camDist = Math.max(5, Math.min(30, camDist + e.deltaY * 0.01));
+      }, {passive: true});
+
+      // Touch
+      let lastTouchDist = 0;
+      el.addEventListener('touchstart', e => {
+        if (e.touches.length === 2) {
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          lastTouchDist = Math.sqrt(dx*dx + dy*dy);
+        }
+      }, {passive: true});
+      el.addEventListener('touchmove', e => {
+        if (e.touches.length === 2) {
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          const dist = Math.sqrt(dx*dx + dy*dy);
+          camDist = Math.max(5, Math.min(30, camDist - (dist - lastTouchDist) * 0.03));
+          lastTouchDist = dist;
+        }
+      }, {passive: true});
+    }
+
+    function updateCamera() {
+      camera.position.x = camTarget.x + camDist * Math.sin(camPhi) * Math.sin(camTheta);
+      camera.position.y = camTarget.y + camDist * Math.cos(camPhi);
+      camera.position.z = camTarget.z + camDist * Math.sin(camPhi) * Math.cos(camTheta);
+      camera.lookAt(camTarget);
+    }
+
+    // ── Build Parking ────────────────────────────
+    function buildParking(mapem) {
+      grid = mapem.grid;
+      spots = mapem.spots;
+      const rows = grid.length, cols = grid[0].length;
+      const offX = -(cols * CELL) / 2, offZ = -(rows * CELL) / 2;
+
+      // Ground
+      const groundGeo = new THREE.PlaneGeometry(cols * CELL + 4, rows * CELL + 4);
+      const groundMat = new THREE.MeshStandardMaterial({ color: COLORS.ground, roughness: 0.9 });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.01;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const v = grid[r][c];
+          const x = offX + c * CELL + CELL/2;
+          const z = offZ + r * CELL + CELL/2;
+
+          if (v === 1) {
+            // Wall
+            const geo = new THREE.BoxGeometry(CELL * 0.95, WALL_H, CELL * 0.95);
+            const mat = new THREE.MeshStandardMaterial({ color: COLORS.wall, roughness: 0.8 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, WALL_H / 2, z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+
+          } else if (v === 0) {
+            // Road — flat
+            const geo = new THREE.PlaneGeometry(CELL * 0.95, CELL * 0.95);
+            const mat = new THREE.MeshStandardMaterial({ color: COLORS.road, roughness: 0.95 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.position.set(x, 0.005, z);
+            mesh.receiveShadow = true;
+            mesh.userData = { r, c, type: 'road' };
+            scene.add(mesh);
+
+          } else if (v === 98) {
+            // Entry
+            const geo = new THREE.PlaneGeometry(CELL * 0.95, CELL * 0.95);
+            const mat = new THREE.MeshStandardMaterial({ color: COLORS.entry, roughness: 0.7, emissive: 0x0a3a1f, emissiveIntensity: 0.3 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.position.set(x, 0.005, z);
+            scene.add(mesh);
+
+            // Arrow
+            const arrowGeo = new THREE.ConeGeometry(0.15, 0.3, 4);
+            const arrowMat = new THREE.MeshStandardMaterial({ color: 0x30d158, emissive: 0x30d158, emissiveIntensity: 0.5 });
+            const arrow = new THREE.Mesh(arrowGeo, arrowMat);
+            arrow.position.set(x, 0.25, z);
+            arrow.rotation.x = 0;
+            scene.add(arrow);
+
+          } else if (v === 99) {
+            // Hall
+            const geo = new THREE.BoxGeometry(CELL * 0.95, 0.15, CELL * 0.95);
+            const mat = new THREE.MeshStandardMaterial({ color: COLORS.hall, roughness: 0.7, emissive: 0x2a0a50, emissiveIntensity: 0.2 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, 0.075, z);
+            scene.add(mesh);
+
+          } else if (v >= 10 && v <= 90) {
+            // Parking spot
+            const sp = spots[String(v)];
+            const etat = sp ? sp.etat : 'FREE';
+            const col = etat === 'OCCUPIED' ? COLORS.occupied : etat === 'ANOMALY' ? COLORS.anomaly : COLORS.free;
+
+            const geo = new THREE.BoxGeometry(CELL * 0.9, SPOT_H, CELL * 0.88);
+            const mat = new THREE.MeshStandardMaterial({
+              color: col, roughness: 0.6, metalness: 0.1,
+              emissive: col, emissiveIntensity: 0.15
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, SPOT_H / 2, z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.userData = { spotId: v, r, c };
+            scene.add(mesh);
+            meshSpots[v] = mesh;
+
+            // Spot lines (white border)
+            const edges = new THREE.EdgesGeometry(new THREE.BoxGeometry(CELL * 0.92, 0.01, CELL * 0.9));
+            const lineMat = new THREE.LineBasicMaterial({ color: COLORS.line, transparent: true, opacity: 0.4 });
+            const lineM = new THREE.LineSegments(edges, lineMat);
+            lineM.position.set(x, 0.005, z);
+            scene.add(lineM);
+
+            // If has sensor, add a small blue sphere
+            if (sp && sp.hardware_id) {
+              const sGeo = new THREE.SphereGeometry(0.06, 8, 8);
+              const sMat = new THREE.MeshStandardMaterial({ color: 0x0a84ff, emissive: 0x0a84ff, emissiveIntensity: 0.8 });
+              const sMesh = new THREE.Mesh(sGeo, sMat);
+              sMesh.position.set(x + CELL * 0.35, 0.2, z - CELL * 0.35);
+              scene.add(sMesh);
+            }
+
+            prevSnap[v] = etat;
+          }
+        }
+      }
+    }
+
+    // ── Update spot color ────────────────────────
+    function updateSpot3D(spotId, etat) {
+      const mesh = meshSpots[spotId];
+      if (!mesh) return;
+      const col = etat === 'OCCUPIED' ? COLORS.occupied : etat === 'ANOMALY' ? COLORS.anomaly : COLORS.free;
+      mesh.material.color.setHex(col);
+      mesh.material.emissive.setHex(col);
+
+      // Check if freed
+      if (prevSnap[spotId] && prevSnap[spotId] !== 'FREE' && etat === 'FREE') {
+        showToast3D(`Place ${spotId} libérée !`);
+      }
+      prevSnap[spotId] = etat;
+    }
+
+    // ── Path 3D ──────────────────────────────────
+    function clearPath3D() {
+      meshPaths.forEach(m => scene.remove(m));
+      meshPaths = [];
+      if (meshDest) { scene.remove(meshDest); meshDest = null; }
+    }
+
+    function drawPath3D(path, destId) {
+      clearPath3D();
+      if (!path || !path.length) return;
+
+      const rows = grid.length, cols = grid[0].length;
+      const offX = -(cols * CELL) / 2, offZ = -(rows * CELL) / 2;
+
+      path.forEach(([r, c], i) => {
+        if (i === 0) return; // skip entry
+        const x = offX + c * CELL + CELL/2;
+        const z = offZ + r * CELL + CELL/2;
+
+        if (i === path.length - 1) {
+          // Destination — glowing ring
+          const ringGeo = new THREE.TorusGeometry(CELL * 0.45, 0.04, 8, 32);
+          const ringMat = new THREE.MeshStandardMaterial({ color: COLORS.dest, emissive: COLORS.dest, emissiveIntensity: 0.8, transparent: true, opacity: 0.8 });
+          const ring = new THREE.Mesh(ringGeo, ringMat);
+          ring.rotation.x = -Math.PI / 2;
+          ring.position.set(x, 0.15, z);
+          scene.add(ring);
+          meshDest = ring;
+          meshPaths.push(ring);
+        } else {
+          // Path cell — glowing flat square
+          const geo = new THREE.PlaneGeometry(CELL * 0.6, CELL * 0.6);
+          const mat = new THREE.MeshStandardMaterial({
+            color: COLORS.path, emissive: COLORS.path, emissiveIntensity: 0.4,
+            transparent: true, opacity: 0.5
+          });
+          const m = new THREE.Mesh(geo, mat);
+          m.rotation.x = -Math.PI / 2;
+          m.position.set(x, 0.02, z);
+          scene.add(m);
+          meshPaths.push(m);
+        }
+      });
+
+      document.getElementById('guide-box').style.display = 'flex';
+      document.getElementById('g-dest').textContent = `Place ${destId} — ${path.length-1} pas`;
+    }
+
+    // ── Toast ────────────────────────────────────
+    function showToast3D(msg) {
+      let t = document.querySelector('.toast-3d');
+      if (t) t.remove();
+      t = document.createElement('div');
+      t.className = 'toast-3d';
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(() => t.classList.add('show'), 10);
+      setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3000);
+    }
+
+    // ── Stats ────────────────────────────────────
+    function updStats3D(f, o) {
+      document.getElementById('s-free').textContent = `${f} libres`;
+      document.getElementById('s-occ').textContent = `${o} occupées`;
+    }
+
+    // ── Animate ──────────────────────────────────
+    let clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      updateCamera();
+
+      const t = clock.getElapsedTime();
+
+      // Pulse destination ring
+      if (meshDest) {
+        meshDest.material.emissiveIntensity = 0.5 + Math.sin(t * 3) * 0.3;
+        meshDest.position.y = 0.15 + Math.sin(t * 2) * 0.03;
+      }
+
+      // Pulse path
+      meshPaths.forEach((m, i) => {
+        if (m !== meshDest) {
+          m.material.opacity = 0.3 + Math.sin(t * 2 + i * 0.5) * 0.2;
+        }
+      });
+
+      renderer.render(scene, camera);
+    }
+
+    // ── Guidance request ─────────────────────────
+    async function findSpot() {
+      try {
+        const res = await fetch('/api/guidance', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+        });
+        const data = await res.json();
+        if (!data.error) drawPath3D(data.path, data.spot_id);
+      } catch {}
+    }
+
+    // ── Socket ───────────────────────────────────
+    function initSocket() {
+      const socket = io({ transports: ['websocket', 'polling'] });
+
+      socket.on('spatem', d => {
+        updateSpot3D(d.spot_id, d.etat);
+        updStats3D(d.free, d.occupied);
+      });
+
+      socket.on('guidance_update', d => {
+        if (d.spot_id) drawPath3D(d.path, d.spot_id);
+        else clearPath3D();
+      });
+    }
+
+    // ── Init ─────────────────────────────────────
+    async function init3D() {
+      initScene();
+
+      try {
+        const res = await fetch('/api/mapem');
+        const mapem = await res.json();
+        buildParking(mapem);
+
+        const vals = Object.values(mapem.spots).map(s => s.etat);
+        updStats3D(
+          vals.filter(v => v === 'FREE').length,
+          vals.filter(v => v === 'OCCUPIED').length
+        );
+      } catch(e) { console.error(e); }
+
+      document.getElementById('btn-find').onclick = findSpot;
+      initSocket();
+      animate();
+      findSpot();
+    }
+
+    init3D();
+  })();
+  </script>
+</body>
+</html>
