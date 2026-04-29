@@ -1,9 +1,10 @@
+import os
 import numpy as np
 import joblib
 from collections import deque
 from datetime import datetime, timezone, timedelta
 
-MODEL_PATH = "C:/Users/othma/OneDrive/Desktop/PFA/SmartParking/server/isolation_forest.pkl"
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "isolation_forest.pkl")
 
 modele_if = joblib.load(MODEL_PATH)
 print(f"[ML]   Modele charge : {MODEL_PATH}")
