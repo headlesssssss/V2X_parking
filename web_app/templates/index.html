@@ -3,58 +3,46 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Parking 3D</title>
+    <title>Smart Parking 3D - Jumeau Numérique</title>
     <style>
-        body {
-            margin: 0;
-            overflow: hidden; /* Empêche le scroll */
-            background-color: #1a1a1a;
-            color: white;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        #ui-container {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            z-index: 10;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-            border: 1px solid #333;
-        }
-        h1 { margin: 0 0 10px 0; font-size: 1.5rem; }
-        .highlight { color: #4CAF50; font-weight: bold; font-size: 1.5em; }
-        .error { color: #f44336; font-weight: bold; font-size: 1.5em; }
-        #canvas-container {
-            width: 100vw;
-            height: 100vh;
-            position: absolute;
-            top: 0;
-            left: 0;
-        }
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #ui-container { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(0, 0, 0, 0.8); padding: 20px; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); border: 1px solid #444; min-width: 200px; }
+        h1 { margin: 0 0 10px 0; font-size: 1.2rem; letter-spacing: 1px; color: #eee; }
+        .label { font-size: 0.9rem; color: #aaa; margin-bottom: 5px; }
+        .highlight { color: #4CAF50; font-weight: bold; font-size: 1.4em; display: block; }
+        .error { color: #f44336; font-weight: bold; font-size: 1.4em; display: block; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 </head>
 <body>
 
     <div id="ui-container">
-        <h1>🚗 Smart Parking 3D</h1>
-        <p>Meilleure place : <br><span id="best-spot">Analyse en cours...</span></p>
+        <h1>🚗 SMART PARKING 3D</h1>
+        <div class="label">Meilleure place disponible :</div>
+        <span id="best-spot">Démarrage...</span>
     </div>
 
     <div id="canvas-container"></div>
 
     <script>
-        // --- 1. INITIALISATION DE LA SCÈNE 3D ---
+        console.log("🚀 ÉTAPE 1 : Le code JavaScript vient de démarrer !");
+
+        // --- 1. CONFIGURATION ---
+        const cellWidth = 6.5;    
+        const cellDepth = 8.0;    
+        const wallThickness = 0.6; 
+        const wallHeight = 1.5;
+
+        // --- 2. INITIALISATION DE LA SCÈNE ---
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a1a);
 
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-        // Position initiale de la caméra (en hauteur et légèrement de biais)
-        camera.position.set(0, 25, 25); 
+        camera.position.set(30, 40, 50); 
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -63,179 +51,171 @@
 
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
 
-        // Lumières
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         scene.add(ambientLight);
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-        dirLight.position.set(10, 20, 10);
-        dirLight.castShadow = true;
-        scene.add(dirLight);
+        const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        sunLight.position.set(20, 50, 10);
+        scene.add(sunLight);
 
-        // Variables globales pour la mise à jour
         let isSceneBuilt = false;
-        const spotsMeshes = {}; // Pour stocker et modifier la couleur des places facilement
-        let pathLine = null;    // Pour stocker le tracé du chemin
-        const cellSize = 2;     // Taille d'une case en 3D
+        const spotsMeshes = {}; 
+        let pathLine = null;    
+        const activeCars = {}; 
+        let carModelTemplate = null;
 
-        // --- 2. FONCTIONS DE CONSTRUCTION ---
+        console.log("✅ ÉTAPE 2 : Scène 3D initialisée. Lancement du chargement de la voiture...");
 
+        // --- 3. CHARGEMENT DU MODÈLE ---
+        try {
+            const loader = new THREE.GLTFLoader();
+            loader.load('/static/car.glb', function(gltf) {
+                carModelTemplate = gltf.scene;
+                
+                // On augmente fortement la taille
+                carModelTemplate.scale.set(3.5, 3.5, 3.5); 
+                
+                // On tourne la voiture de 90 degrés pour qu'elle rentre dans la place
+                carModelTemplate.rotation.y = Math.PI / 2; 
+                
+                console.log("🚗 SUCCÈS : Modèle de voiture chargé !");
+            }, undefined, function(error) {
+                console.error("❌ ERREUR : Impossible de trouver /static/car.glb", error);
+            });
+        } catch(e) {
+            console.error("Erreur critique sur Three.js :", e);
+        }
+
+        // --- 4. CONSTRUCTION DU PARKING ---
         function buildParking(grid) {
+            console.log("🏗️ ÉTAPE 4 : Construction du parking en 3D...");
             const rows = grid.length;
             const cols = grid[0].length;
-            
-            // Calculer les offsets pour centrer le parking au milieu de l'écran
-            const offsetX = (cols * cellSize) / 2 - (cellSize / 2);
-            const offsetZ = (rows * cellSize) / 2 - (cellSize / 2);
+            const offsetX = (cols * cellWidth) / 2 - (cellWidth / 2);
+            const offsetZ = (rows * cellDepth) / 2 - (cellDepth / 2);
+
+            const groundGeo = new THREE.PlaneGeometry(cols * cellWidth + 10, rows * cellDepth + 10);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.set(0, -0.05, 0);
+            scene.add(ground);
 
             for (let r = 0; r < rows; r++) {
                 for (let c = 0; c < cols; c++) {
                     const val = grid[r][c];
+                    const posX = c * cellWidth - offsetX;
+                    const posZ = r * cellDepth - offsetZ;
                     
-                    // Positions X (gauche/droite) et Z (profondeur)
-                    const posX = c * cellSize - offsetX;
-                    const posZ = r * cellSize - offsetZ;
-                    
-                    let geometry, material, height, posY;
-
                     if (val === 1) {
-                        // Mur / Trottoir
-                        height = 1.5;
-                        geometry = new THREE.BoxGeometry(cellSize, height, cellSize);
-                        material = new THREE.MeshStandardMaterial({ color: 0x555555 });
-                        posY = height / 2;
-                    } else if (val === 0 || val === 98) {
-                        // Route ou Entrée
-                        height = 0.1;
-                        geometry = new THREE.BoxGeometry(cellSize, height, cellSize);
-                        material = new THREE.MeshStandardMaterial({ color: 0x333333 });
-                        posY = height / 2;
+                        const wall = new THREE.Mesh(new THREE.BoxGeometry(cellWidth, wallHeight, wallThickness), new THREE.MeshStandardMaterial({ color: 0x444444 }));
+                        wall.position.set(posX, wallHeight / 2, posZ);
+                        scene.add(wall);
                     } else if (val >= 10 && val <= 90) {
-                        // Place de parking (initialement grise)
-                        height = 0.2;
-                        geometry = new THREE.BoxGeometry(cellSize * 0.9, height, cellSize * 0.9);
-                        material = new THREE.MeshStandardMaterial({ color: 0x888888 });
-                        posY = height / 2;
-                    } else {
-                        continue; // Ignore les autres valeurs (comme 99)
-                    }
-
-                    const mesh = new THREE.Mesh(geometry, material);
-                    mesh.position.set(posX, posY, posZ);
-                    mesh.receiveShadow = true;
-                    if (val === 1) mesh.castShadow = true;
-                    
-                    scene.add(mesh);
-
-                    // Sauvegarder la référence des places pour changer leur couleur plus tard
-                    if (val >= 10 && val <= 90) {
-                        spotsMeshes[val] = mesh;
+                        const spot = new THREE.Mesh(new THREE.BoxGeometry(cellWidth * 0.9, 0.05, cellDepth * 0.9), new THREE.MeshStandardMaterial({ color: 0x888888, transparent: true, opacity: 0.6 }));
+                        spot.position.set(posX, 0.02, posZ);
+                        scene.add(spot);
+                        spotsMeshes[val] = spot;
+                    } else if (val === 98) {
+                        const entrance = new THREE.Mesh(new THREE.PlaneGeometry(cellWidth, cellDepth), new THREE.MeshStandardMaterial({ color: 0x2c3e50 }));
+                        entrance.rotation.x = -Math.PI / 2;
+                        entrance.position.set(posX, 0.01, posZ);
+                        scene.add(entrance);
                     }
                 }
             }
             isSceneBuilt = true;
+            console.log("✅ FINI : Parking construit !");
+        }
+
+        // --- 5. VOITURES & CHEMIN ---
+        function addCar(spotId, position) {
+            if (!activeCars[spotId] && carModelTemplate) {
+                const car = carModelTemplate.clone();
+                
+                // On soulève la voiture sur l'axe Y (0.8) pour sortir les roues du sol
+                car.position.set(position.x, 0.8, position.z); 
+                
+                scene.add(car);
+                activeCars[spotId] = car;
+            }
+        }
+
+        function removeCar(spotId) {
+            if (activeCars[spotId]) {
+                scene.remove(activeCars[spotId]);
+                delete activeCars[spotId];
+            }
         }
 
         function drawPath(pathArray, grid) {
-            // Supprimer l'ancien chemin s'il existe
-            if (pathLine) {
-                scene.remove(pathLine);
-                pathLine = null;
-            }
-
+            if (pathLine) { scene.remove(pathLine); pathLine = null; }
             if (!pathArray || pathArray.length === 0) return;
-
-            const rows = grid.length;
-            const cols = grid[0].length;
-            const offsetX = (cols * cellSize) / 2 - (cellSize / 2);
-            const offsetZ = (rows * cellSize) / 2 - (cellSize / 2);
-
+            const offsetX = (grid[0].length * cellWidth) / 2 - (cellWidth / 2);
+            const offsetZ = (grid.length * cellDepth) / 2 - (cellDepth / 2);
             const points = [];
             pathArray.forEach(coord => {
-                const posX = coord.col * cellSize - offsetX;
-                const posZ = coord.row * cellSize - offsetZ;
-                // On surélève un peu le chemin pour qu'il flotte au-dessus du sol (Y = 1.0)
-                points.push(new THREE.Vector3(posX, 1.0, posZ));
+                points.push(new THREE.Vector3(coord.col * cellWidth - offsetX, 0.6, coord.row * cellDepth - offsetZ));
             });
-
-            // Création d'une ligne brillante
-            const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({ 
-                color: 0x00d2ff, 
-                linewidth: 3 // Note: linewidth n'est supporté que sur certains navigateurs (WebGL)
-            });
-            
-            pathLine = new THREE.Line(geometry, material);
+            pathLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x00d2ff, linewidth: 5 }));
             scene.add(pathLine);
         }
 
-        // --- 3. COMMUNICATION AVEC L'API ---
-
+        // --- 6. APPEL DE L'API ---
         async function fetchParkingData() {
             try {
                 const response = await fetch('/api/data');
                 const data = await response.json();
 
-                // 3.1 Construire la scène la première fois
-                if (!isSceneBuilt && data.grid) {
-                    buildParking(data.grid);
-                }
+                if (!isSceneBuilt && data.grid) buildParking(data.grid);
 
-                // 3.2 Mettre à jour l'UI
+                // Mise à jour de l'interface corrigée
                 const spotElement = document.getElementById('best-spot');
-                if (data.best_spot) {
+                if (data.best_spot !== undefined && data.best_spot !== null) {
                     spotElement.className = "highlight";
-                    spotElement.innerText = "N° " + data.best_spot;
+                    spotElement.innerText = "Place N° " + data.best_spot;
                 } else {
                     spotElement.className = "error";
-                    spotElement.innerText = "Complet";
+                    spotElement.innerText = "PARKING COMPLET";
                 }
 
-                // 3.3 Mettre à jour la couleur des places 3D
                 if (data.status) {
                     for (const [spotId, status] of Object.entries(data.status)) {
                         const mesh = spotsMeshes[spotId];
                         if (mesh) {
                             if (status === "FREE") {
-                                mesh.material.color.setHex(0x4CAF50); // Vert
+                                mesh.material.color.setHex(0x4CAF50); removeCar(spotId);
                             } else if (status === "OCCUPIED") {
-                                mesh.material.color.setHex(0xf44336); // Rouge
+                                mesh.material.color.setHex(0xf44336); addCar(spotId, mesh.position);
                             } else {
-                                mesh.material.color.setHex(0x555555); // Gris foncé (UNAVAILABLE)
+                                mesh.material.color.setHex(0x333333); removeCar(spotId);
                             }
                         }
                     }
                 }
-
-                // 3.4 Dessiner le chemin A*
-                if (data.path && data.grid) {
-                    drawPath(data.path, data.grid);
-                }
-
-            } catch (error) {
-                console.error("Erreur API :", error);
+                if (data.path && data.grid) drawPath(data.path, data.grid);
+            } catch (error) { 
+                console.error("🚨 ERREUR API :", error); 
             }
         }
 
-        // --- 4. BOUCLE D'ANIMATION ---
+        // --- 7. LANCEMENT ---
         function animate() {
             requestAnimationFrame(animate);
-            controls.update(); // Requis si damping est activé
+            controls.update();
             renderer.render(scene, camera);
         }
 
-        // --- 5. GESTION DU REDIMENSIONNEMENT ---
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // Lancement
+        console.log("🏁 ÉTAPE 3 : Démarrage du moteur 3D et de l'horloge API !");
         animate();
         fetchParkingData();
-        setInterval(fetchParkingData, 2000); // Mise à jour toutes les 2 secondes
+        setInterval(fetchParkingData, 2000);
 
     </script>
 </body>
