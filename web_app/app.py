@@ -22,30 +22,30 @@ def load_json(path):
 def a_star(grid, start, goal):
     rows, cols = len(grid), len(grid[0])
     open_set = []
-    heapq.heappush(open_set, (0, start))
-    came_from = {}
-    g_score = {start: 0}
-    f_score = {start: abs(start[0]-goal[0]) + abs(start[1]-goal[1])}
+    heapq.heappush(open_set, (0, start))  # File de priorité : (coût f, position)
+    came_from = {}                         # Dictionnaire de reconstruction du chemin
+    g_score = {start: 0}                  # Coût réel depuis le point de départ
+    f_score = {start: abs(start[0]-goal[0]) + abs(start[1]-goal[1])}  # f = g + h (Manhattan)
 
     while open_set:
-        current = heapq.heappop(open_set)[1]
+        current = heapq.heappop(open_set)[1]  # Nœud avec le plus petit coût f
 
         if current == goal:
             path = []
-            while current in came_from:
+            while current in came_from:       # Reconstruction du chemin en remontant
                 path.append({"row": current[0], "col": current[1]})
                 current = came_from[current]
             path.append({"row": start[0], "col": start[1]})
-            return path[::-1]
+            return path[::-1]                 # Retour du chemin dans le bon sens
 
-        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:  # 4 directions possibles
             neighbor = (current[0] + dr, current[1] + dc)
             
             if 0 <= neighbor[0] < rows and 0 <= neighbor[1] < cols:
-                # Une case est franchissable si c'est de la route (0), 
+                # Une case est franchissable si c'est de la route (0),
                 # l'entrée (98) ou la place de destination (goal)
-                is_walkable = (grid[neighbor[0]][neighbor[1]] == 0 or 
-                               grid[neighbor[0]][neighbor[1]] == 98 or 
+                is_walkable = (grid[neighbor[0]][neighbor[1]] == 0 or
+                               grid[neighbor[0]][neighbor[1]] == 98 or
                                neighbor == goal)
                 
                 if is_walkable:
@@ -53,9 +53,10 @@ def a_star(grid, start, goal):
                     if tentative_g_score < g_score.get(neighbor, float('inf')):
                         came_from[neighbor] = current
                         g_score[neighbor] = tentative_g_score
+                        # Mise à jour de f = g + heuristique Manhattan
                         f_score[neighbor] = tentative_g_score + abs(neighbor[0]-goal[0]) + abs(neighbor[1]-goal[1])
                         heapq.heappush(open_set, (f_score[neighbor], neighbor))
-    return []
+    return []  # Aucun chemin trouvé
 
 # --- ROUTES ---
 
