@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartPark V2X - Console Admin</title>
+    <script src="/static/tailwind.min.css"></script>
+    <script src="/static/phosphor.js"></script>
+    <script src="/static/socket.io.min.js"></script>
+    <script src="/static/qrcode.js"></script>
+    <style>
+        /* overflow-x-hidden pour éviter les barres horizontales sur mobile */
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: #0f172a; color: white; overflow-x: hidden; transition: all 0.3s ease;}
+        
+        /* THEME CLAIR SPECIFIQUE ADMIN */
+        .theme-light { background-color: #f8fafc !important; color: #0f172a !important; }
+        .theme-light header { background-color: #ffffff !important; border-color: #e2e8f0 !important; }
+        .theme-light aside { background-color: #ffffff !important; border-color: #e2e8f0 !important; }
+        .theme-light section { background-color: #f1f5f9 !important; }
+        .theme-light .bg-slate-900 { background-color: #ffffff !important; border-color: #e2e8f0 !important; }
+        .theme-light .bg-slate-800 { background-color: #f8fafc !important; border-color: #e2e8f0 !important; }
+        .theme-light .bg-slate-950 { background-color: #f1f5f9 !important; }
+        .theme-light .text-slate-400 { color: #64748b !important; }
+        .theme-light .text-slate-300 { color: #475569 !important; }
+        .theme-light .text-white { color: #0f172a !important; }
+        .theme-light .border-slate-800, .theme-light .border-slate-700 { border-color: #e2e8f0 !important; }
+        
+        /* Modal QR Code en Mode Clair */
+        .theme-light #qr-modal { background-color: rgba(255,255,255,0.85) !important; }
+        .theme-light #qr-modal-content { background-color: #ffffff !important; border-color: #cbd5e1 !important; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1) !important; }
+        .theme-light #qr-modal-content .bg-slate-900 { background-color: #f8fafc !important; border-color: #e2e8f0 !important; }
+        .theme-light #qr-modal-content h2 { color: #0f172a !important; }
+
+        /* Map Styles - Rendu RESPONSIVE */
+        #map-wrapper { width: 100%; display: flex; justify-content: center; margin-top: 20px; transition: all 0.3s ease; overflow: hidden; padding-bottom: 20px;}
+        
+        #map-scaler { transform-origin: top center; transition: transform 0.3s ease; transform: scale(0.75); margin-bottom: -112px; }
+        @media (max-width: 1280px) { #map-scaler { transform: scale(0.65); margin-bottom: -157px; } }
+        @media (max-width: 850px) { #map-scaler { transform: scale(0.55); margin-bottom: -202px; } }
+        @media (max-width: 600px) { #map-scaler { transform: scale(0.40); margin-bottom: -270px; } }
+        @media (max-width: 400px) { #map-scaler { transform: scale(0.35); margin-bottom: -292px; } }
+
+        #map-container { position: relative; width: 800px; height: 450px; background-color: #1e293b; border-radius: 12px; border: 4px solid #334155; transition: all 0.3s ease;}
+        .theme-light #map-container { background-color: #e2e8f0; border-color: #cbd5e1; }
+        
+        .road-line-horizontal { position: absolute; top: 225px; left: 20px; width: 760px; height: 4px; background-image: linear-gradient(to right, transparent 50%, rgba(255, 255, 255, 0.3) 50%); background-size: 40px 100%; pointer-events: none; }
+        .theme-light .road-line-horizontal { background-image: linear-gradient(to right, transparent 50%, rgba(0, 0, 0, 0.15) 50%); }
+        
+        .spot { position: absolute; width: 60px; height: 90px; border: 3px solid rgba(255,255,255,0.4); display: flex; justify-content: center; align-items: center; font-size: 14px; font-weight: bold; box-sizing: border-box; background-color: rgba(30, 41, 59, 0.8); transition: opacity 0.3s ease; cursor: pointer;}
+        .theme-light .spot { border-color: rgba(0,0,0,0.1); background-color: rgba(255,255,255,0.8); }
+        
+        .spot.top-row { border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+        .spot.bottom-row { border-top: none; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+        
+        .spot.free { background-color: rgba(16, 185, 129, 0.1); border-color: #10b981; color: #10b981; }
+        .spot.occupied { background-color: rgba(239, 68, 68, 0.15); border-color: #ef4444; color: #ef4444;}
+        .spot.anomaly { background-color: rgba(245, 158, 11, 0.2); border-color: #f59e0b; color: #f59e0b; animation: pulse-err 1.5s infinite;}
+        
+        .theme-light .spot.free { background-color: rgba(16, 185, 129, 0.1); }
+        .theme-light .spot.occupied { background-color: rgba(239, 68, 68, 0.15); }
+        
+        @keyframes pulse-err { 0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); } 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); } }
+
+        .car-icon { font-size: 32px; color: #ef4444; }
+        .spot.vertical.top-row .car-icon { transform: rotate(180deg); }
+        .spot.vertical.bottom-row .car-icon { transform: rotate(0deg); }
+        .spot.horizontal .car-icon { transform: rotate(90deg); } 
+        
+        .building-block { position: absolute; background: #9a3412; color: white; display: flex; justify-content: center; align-items: center; border-radius: 8px; font-weight: bold; letter-spacing: 1px; }
+        #hall-ensaj { top: 10px; left: 320px; width: 160px; height: 50px; font-size: 18px; }
+        #entree-main { bottom: 10px; left: 350px; width: 100px; height: 40px; font-size: 16px; }
+
+        .log-enter { animation: slideIn 0.3s ease-out forwards; }
+        .theme-light .log-enter { background-color: #f8fafc !important; border-color: #e2e8f0 !important; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col relative overflow-x-hidden">
+
+    <header class="bg-slate-900 border-b border-slate-800 p-4 flex flex-wrap justify-between items-center shrink-0 z-10 shadow-md gap-4">
+        <div class="flex items-center gap-3">
+            <div class="bg-red-500 p-2 rounded-lg"><i class="ph-bold ph-shield-check text-white text-xl"></i></div>
+            <h1 class="text-xl font-bold text-white tracking-wide">Console Administration</h1>
+        </div>
+        <div class="flex flex-wrap gap-2 items-center">
+            <div class="text-xs bg-slate-800 text-emerald-400 px-3 py-1.5 rounded border border-slate-700 font-bold flex items-center gap-2">
+                <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span> Sync Active
+            </div>
+            <div class="text-xs bg-slate-800 text-slate-300 px-3 py-1.5 rounded border border-slate-700 font-mono flex items-center gap-2">
+                <i class="ph-bold ph-clock"></i> <span id="server-time">--:--:--</span>
+            </div>
+
+            <!-- BOUTON QR CODE -->
+            <button onclick="showQRModal()" class="bg-slate-800 border border-slate-700 p-1.5 rounded hover:bg-slate-700 transition" title="Afficher les QR Codes">
+                <i class="ph-bold ph-qr-code text-lg text-cyan-400"></i>
+            </button>
+
+            <!-- BOUTON MODE CLAIR -->
+            <button onclick="toggleTheme()" class="bg-slate-800 border border-slate-700 p-1.5 rounded hover:bg-slate-700 transition" title="Changer le thème">
+                <i id="theme-icon" class="ph-bold ph-sun text-lg text-amber-400"></i>
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 flex flex-col lg:flex-row w-full">
+        
+        <aside class="w-full lg:w-80 bg-slate-900 border-b lg:border-r lg:border-b-0 border-slate-800 p-6 flex flex-col gap-6 shrink-0 z-10">
+            <div>
+                <h2 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4 flex items-center gap-2"><i class="ph-bold ph-chart-pie-slice"></i> Statistiques</h2>
+                
+                <div class="mb-4">
+                    <div class="flex justify-between text-xs font-bold mb-1">
+                        <span class="text-slate-300">Taux d'occupation</span>
+                        <span id="occupancy-percent" class="text-cyan-500">0%</span>
+                    </div>
+                    <div class="w-full bg-slate-800 rounded-full h-2.5 border border-slate-700">
+                        <div id="occupancy-bar" class="bg-cyan-500 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="bg-slate-800 border border-slate-700 p-4 rounded-xl text-center shadow-lg">
+                        <div class="text-3xl font-black text-emerald-500" id="stat-free">16</div>
+                        <div class="text-[10px] text-slate-400 font-bold uppercase mt-1 tracking-widest">Libres</div>
+                    </div>
+                    <div class="bg-slate-800 border border-slate-700 p-4 rounded-xl text-center shadow-lg">
+                        <div class="text-3xl font-black text-red-500" id="stat-occ">0</div>
+                        <div class="text-[10px] text-slate-400 font-bold uppercase mt-1 tracking-widest">Occupées</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-2">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-slate-400 text-xs font-bold uppercase tracking-wider flex items-center gap-2"><i class="ph-bold ph-warning-circle"></i> Système IA</h2>
+                    <button onclick="resetAnomalies()" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-600 transition">Réinitialiser</button>
+                </div>
+                <div class="bg-slate-800 border border-slate-700 p-4 rounded-xl shadow-lg">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-amber-500 font-bold text-sm">Alertes Anomalies</span>
+                        <span class="bg-amber-500/20 text-amber-500 border border-amber-500/30 text-xs font-bold px-2 py-0.5 rounded-full" id="stat-err">0</span>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-2">Capteurs défaillants détectés.</p>
+                </div>
+            </div>
+
+            <div class="mt-2 flex-1 flex flex-col min-h-0">
+                <h2 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2"><i class="ph-bold ph-list-dashes"></i> èvénements Récents</h2>
+                <div class="bg-slate-800 border border-slate-700 rounded-xl p-3 shadow-inner max-h-48 lg:flex-1 lg:max-h-none overflow-y-auto">
+                    <ul id="event-logs" class="space-y-2">
+                        <li class="text-xs text-slate-500 italic text-center mt-2">En attente d'activité...</li>
+                    </ul>
+                </div>
+            </div>
+
+        </aside>
+
+        <section class="flex-1 bg-slate-950 p-4 lg:p-6 flex flex-col items-center">
+            
+            <div class="w-full max-w-4xl mb-6 z-10">
+                <div class="bg-slate-900 border border-slate-700 rounded-2xl p-4 lg:p-6 shadow-xl">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 gap-4">
+                        <div>
+                            <h2 class="text-lg font-bold text-white mb-1 flex items-center"><i class="ph-fill ph-sliders-horizontal text-cyan-500 mr-2"></i>Contrôle Matériel & Virtuel</h2>
+                            <p class="text-xs text-slate-400">Cliquez sur une place pour forcer son état sur l'écran du conducteur.</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button onclick="simulateAnomaly()" class="bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-xs font-bold px-4 py-2 rounded-lg text-amber-500 transition">Test IA</button>
+                            <button onclick="randomizeAll()" class="bg-slate-800 border border-slate-700 hover:bg-slate-700 text-xs font-bold px-4 py-2 rounded-lg text-slate-300 transition">Aléatoire</button>
+                            <button onclick="clearAll()" class="bg-slate-800 border border-slate-700 hover:bg-slate-700 text-xs font-bold px-4 py-2 rounded-lg text-slate-300 transition">Tout vider</button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" id="controls">
+                        <!-- Généré par JS -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="w-full max-w-4xl">
+                <div class="flex justify-between items-center mb-3 lg:ml-4 lg:mr-4">
+                    <h2 class="text-slate-400 text-xs font-bold uppercase tracking-wider"><i class="ph-bold ph-map-pin mr-2"></i>Supervision en direct</h2>
+                </div>
+                
+                <div id="map-wrapper">
+                    <div id="map-scaler">
+                        <div id="map-container">
+                            <div class="road-line-horizontal"></div>
+                            <div id="hall-ensaj" class="building-block">Hall ENSAJ</div>
+                            <div id="entree-main" class="building-block">Entrée</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <!-- MODAL QR CODE INTEGRE -->
+    <div id="qr-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex justify-center items-center opacity-0 transition-opacity duration-300">
+        <div class="bg-slate-800 border border-slate-700 p-6 md:p-8 rounded-3xl shadow-2xl max-w-2xl w-[90vw] mx-auto transform scale-95 transition-transform duration-300" id="qr-modal-content">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl md:text-2xl font-bold text-white flex items-center gap-2"><i class="ph-fill ph-qr-code text-cyan-400"></i> Accès Mobile</h2>
+                <button onclick="hideQRModal()" class="text-slate-400 hover:text-white transition"><i class="ph-bold ph-x text-2xl"></i></button>
+            </div>
+            
+            <p class="text-sm text-slate-400 mb-6 text-center">Scannez ces QR codes avec votre smartphone (connecté au même réseau WiFi).</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-slate-900 p-6 rounded-2xl flex flex-col items-center border border-slate-700 shadow-inner">
+                    <h3 class="font-bold text-emerald-500 mb-4 flex items-center gap-2"><i class="ph-fill ph-steering-wheel"></i> Vue Conducteur</h3>
+                    <div id="qr-driver-img" class="bg-white p-3 rounded-xl w-[150px] h-[150px] flex justify-center items-center"></div>
+                    <p id="qr-driver-url" class="text-[10px] text-slate-500 mt-4 font-mono break-all text-center"></p>
+                </div>
+
+                <div class="bg-slate-900 p-6 rounded-2xl flex flex-col items-center border border-slate-700 shadow-inner">
+                    <h3 class="font-bold text-red-500 mb-4 flex items-center gap-2"><i class="ph-fill ph-shield-check"></i> Vue Admin</h3>
+                    <div id="qr-admin-img" class="bg-white p-3 rounded-xl w-[150px] h-[150px] flex justify-center items-center"></div>
+                    <p id="qr-admin-url" class="text-[10px] text-slate-500 mt-4 font-mono break-all text-center"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // LOGIQUE QR CODE
+        function showQRModal() {
+            const modal = document.getElementById('qr-modal');
+            const modalContent = document.getElementById('qr-modal-content');
+            // IP fixe du serveur pour que le QR Code fonctionne sur le reseau local
+            const serverIP = "192.168.1.3";
+            const serverPort = "5000";
+            const baseUrl = "http://" + serverIP + ":" + serverPort;
+            const driverUrl = baseUrl + "/";
+            const adminUrl = baseUrl + "/admin";
+
+            // Génération locale des QR codes (sans internet)
+            function makeQR(text, containerId) {
+                const container = document.getElementById(containerId);
+                container.innerHTML = '';
+                const qr = qrcode(0, 'M');
+                qr.addData(text);
+                qr.make();
+                const canvas = document.createElement('canvas');
+                const size = 150;
+                const cellSize = Math.floor(size / qr.getModuleCount());
+                canvas.width = qr.getModuleCount() * cellSize;
+                canvas.height = qr.getModuleCount() * cellSize;
+                const ctx = canvas.getContext('2d');
+                for (let r = 0; r < qr.getModuleCount(); r++) {
+                    for (let c = 0; c < qr.getModuleCount(); c++) {
+                        ctx.fillStyle = qr.isDark(r, c) ? '#000000' : '#ffffff';
+                        ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
+                    }
+                }
+                canvas.style.width = '100%';
+                canvas.style.height = '100%';
+                container.appendChild(canvas);
+            }
+            makeQR(driverUrl, 'qr-driver-img');
+            makeQR(adminUrl, 'qr-admin-img');
+            
+            document.getElementById('qr-driver-url').innerText = driverUrl;
+            document.getElementById('qr-admin-url').innerText = adminUrl;
+
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                modalContent.classList.remove('scale-95');
+            }, 10);
+        }
+
+        function hideQRModal() {
+            const modal = document.getElementById('qr-modal');
+            const modalContent = document.getElementById('qr-modal-content');
+            
+            modal.classList.add('opacity-0');
+            modalContent.classList.add('scale-95');
+            setTimeout(() => { modal.classList.add('hidden'); }, 300);
+        }
+
+        // LOGIQUE DU MODE CLAIR ADMIN
+        let isLight = false;
+        function toggleTheme() {
+            isLight = !isLight;
+            if(isLight) {
+                document.body.classList.add('theme-light');
+                document.getElementById('theme-icon').className = "ph-bold ph-moon text-lg text-indigo-500";
+            } else {
+                document.body.classList.remove('theme-light');
+                document.getElementById('theme-icon').className = "ph-bold ph-sun text-lg text-amber-400";
+            }
+        }
+
+        setInterval(() => { document.getElementById('server-time').innerText = new Date().toLocaleTimeString('fr-FR'); }, 1000);
+
+        const spots = [];
+        const topY = 20; const bottomY = 340;
+        
+        let startPosX = 30;
+        for(let i=1; i<=4; i++) { spots.push({ id: `P${i}`, row: 'top', orientation: 'horizontal', x: startPosX, y: topY, state: 'free', isPhysical: i===4 }); startPosX += 70; }
+        startPosX = 500;
+        for(let i=5; i<=8; i++) { spots.push({ id: `P${i}`, row: 'top', orientation: 'vertical', x: startPosX, y: topY, state: 'free', isPhysical: i===8 }); startPosX += 70; }
+        startPosX = 30;
+        for(let i=9; i<=12; i++) { spots.push({ id: `P${i}`, row: 'bottom', orientation: 'vertical', x: startPosX, y: bottomY, state: 'free', isPhysical: i===9 }); startPosX += 70; }
+        startPosX = 500;
+        for(let i=13; i<=16; i++) { spots.push({ id: `P${i}`, row: 'bottom', orientation: 'horizontal', x: startPosX, y: bottomY, state: 'free', isPhysical: i===14 }); startPosX += 70; }
+
+        const mapContainer = document.getElementById('map-container');
+        const controlsDiv = document.getElementById('controls');
+        
+        let eventLogs = [];
+        const maxLogs = 6;
+        function addLog(placeId, state) {
+            const time = new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+            let color = state === 'free' ? 'text-emerald-500' : (state === 'occupied' ? 'text-red-500' : 'text-amber-500');
+            let textState = state === 'free' ? 'Libérée' : (state === 'occupied' ? 'Occupée' : 'Erreur IA');
+            let icon = state === 'free' ? 'ph-check-circle' : (state === 'occupied' ? 'ph-car' : 'ph-warning-octagon');
+            
+            const logEntry = `<li class="log-enter text-[11px] bg-slate-900 border border-slate-700/50 p-2 rounded flex justify-between items-center">
+                <span class="text-slate-400 font-mono">${time}</span>
+                <span class="font-bold text-white">${placeId}</span>
+                <span class="${color} flex items-center gap-1 font-semibold"><i class="ph-fill ${icon}"></i> ${textState}</span>
+            </li>`;
+            
+            eventLogs.unshift(logEntry);
+            if(eventLogs.length > maxLogs) eventLogs.pop();
+            
+            document.getElementById('event-logs').innerHTML = eventLogs.join('');
+        }
+
+        function renderMap() {
+            document.querySelectorAll('.spot').forEach(e => e.remove());
+            let occCount = 0; let errCount = 0;
+
+            spots.forEach(spot => {
+                if(spot.state === 'occupied') occCount++;
+                if(spot.state === 'anomaly') errCount++;
+
+                const el = document.createElement('div');
+                const rowClass = spot.row === 'top' ? 'top-row' : 'bottom-row';
+                el.className = `spot ${rowClass} ${spot.orientation} ${spot.state}`;
+                el.style.left = `${spot.x}px`; el.style.top = `${spot.y}px`;
+                
+                if(spot.state === 'occupied') {
+                    el.innerHTML = `<i class="ph-fill ph-car car-icon"></i>`;
+                } else if(spot.state === 'anomaly') {
+                    el.innerHTML = `<i class="ph-bold ph-warning text-3xl"></i>`;
+                } else {
+                    el.innerHTML = spot.id;
+                }
+
+                // Permettre de cliquer directement sur la carte de l'admin
+                el.onclick = () => {
+                    let newState = spot.state === 'free' ? 'occupied' : 'free';
+                    if (spot.state === 'anomaly') newState = 'free'; 
+                    spot.state = newState;
+                    localStorage.setItem('force_spot_' + spot.id, newState);
+                    addLog(spot.id, newState);
+                    renderMap(); renderControls();
+                };
+
+                mapContainer.appendChild(el);
+            });
+
+            let freeCount = 16 - occCount - errCount;
+            document.getElementById('stat-free').innerText = freeCount;
+            document.getElementById('stat-occ').innerText = occCount;
+            document.getElementById('stat-err').innerText = errCount;
+            
+            let percent = Math.round((occCount / 16) * 100);
+            document.getElementById('occupancy-percent').innerText = percent + "%";
+            document.getElementById('occupancy-bar').style.width = percent + "%";
+            if(percent > 80) document.getElementById('occupancy-bar').className = "h-2.5 rounded-full transition-all duration-500 bg-red-500";
+            else if(percent > 50) document.getElementById('occupancy-bar').className = "h-2.5 rounded-full transition-all duration-500 bg-amber-500";
+            else document.getElementById('occupancy-bar').className = "h-2.5 rounded-full transition-all duration-500 bg-cyan-500";
+        }
+
+        function renderControls() {
+            controlsDiv.innerHTML = '';
+            const sortedSpots = [...spots].sort((a, b) => {
+                if(a.isPhysical && !b.isPhysical) return -1;
+                if(!a.isPhysical && b.isPhysical) return 1;
+                return parseInt(a.id.substring(1)) - parseInt(b.id.substring(1));
+            });
+            
+            sortedSpots.forEach(spot => {
+                const btn = document.createElement('button');
+                
+                let btnStyle = 'bg-slate-800 border-slate-700 hover:bg-slate-700'; // free
+                if (spot.state === 'occupied') btnStyle = 'bg-red-500/10 border-red-500/30 text-red-500';
+                if (spot.state === 'anomaly') btnStyle = 'bg-amber-500/20 border-amber-500/50 text-amber-500';
+
+                btn.className = `p-3 rounded-xl border text-left transition-colors ${btnStyle}`;
+                let badge = spot.isPhysical ? `<span class="w-2 h-2 bg-blue-500 rounded-full inline-block mr-1 shadow-[0_0_5px_#3b82f6]"></span>` : ``;
+                
+                let iconState = spot.state === 'free' ? 'ph-car text-slate-500' : (spot.state === 'occupied' ? 'ph-x-circle text-red-500' : 'ph-warning text-amber-500');
+                let textState = spot.state === 'free' ? 'Libre' : (spot.state === 'occupied' ? 'Occupée' : 'Erreur');
+
+                btn.innerHTML = `
+                    <div class="text-xs text-slate-400 mb-1 flex items-center justify-between">
+                        <span>${badge}Place ${spot.id}</span>
+                        ${spot.isPhysical ? '<span class="text-[9px] bg-slate-700 px-1 rounded text-white hidden sm:inline">Matériel</span>' : ''}
+                    </div>
+                    <div class="font-bold flex items-center justify-between">
+                        ${textState}
+                        <i class="ph-fill ${iconState} text-lg"></i>
+                    </div>
+                `;
+                
+                btn.onclick = () => {
+                    let newState = spot.state === 'free' ? 'occupied' : 'free';
+                    if (spot.state === 'anomaly') newState = 'free'; 
+                    
+                    spot.state = newState;
+                    localStorage.setItem('force_spot_' + spot.id, newState);
+                    addLog(spot.id, newState);
+                    renderMap(); renderControls();
+                };
+                controlsDiv.appendChild(btn);
+            });
+        }
+
+        function clearAll() { 
+            spots.forEach(s => { s.state = 'free'; localStorage.removeItem('force_spot_' + s.id); }); 
+            localStorage.setItem('clear_all_spots', Date.now());
+            addLog("Toutes", "free");
+            renderMap(); renderControls(); 
+        }
+
+        function randomizeAll() { 
+            let count = 0;
+            spots.forEach(s => { 
+                let newState = Math.random() > 0.6 ? 'occupied' : 'free';
+                if(s.state !== newState) { s.state = newState; count++; }
+                localStorage.setItem('force_spot_' + s.id, newState); 
+            }); 
+            localStorage.setItem('randomize_spots', Date.now());
+            addLog(`Génération`, "occupied");
+            renderMap(); renderControls(); 
+        }
+
+        function simulateAnomaly() {
+            let freeSpots = spots.filter(s => s.state === 'free' && !s.isPhysical);
+            if(freeSpots.length > 0) {
+                let s = freeSpots[Math.floor(Math.random() * freeSpots.length)];
+                s.state = 'anomaly';
+                localStorage.setItem('force_spot_' + s.id, 'anomaly');
+                addLog(s.id, "anomaly");
+                renderMap(); renderControls();
+            }
+        }
+
+        function resetAnomalies() {
+            spots.forEach(s => {
+                if(s.state === 'anomaly') {
+                    s.state = 'free';
+                    localStorage.setItem('force_spot_' + s.id, 'free');
+                    addLog(s.id, "free");
+                }
+            });
+            renderMap(); renderControls();
+        }
+
+        spots.forEach(s => { let forced = localStorage.getItem('force_spot_' + s.id); if (forced) s.state = forced; });
+        
+        const socket = io();
+        socket.on('update_data', function(msg) {
+            if(msg && msg.places) {
+                for (const [rawId, stateVal] of Object.entries(msg.places)) {
+                    let frontendId = rawId.toString();
+                    if(frontendId.startsWith('1') && frontendId.length === 2) {
+                        frontendId = 'P' + (parseInt(frontendId) - 10);
+                    } else if(frontendId.startsWith('2') && frontendId.length === 2) {
+                        frontendId = 'P' + (parseInt(frontendId) - 20 + 8);
+                    }
+
+                    let spot = spots.find(s => s.id === frontendId);
+                    if(spot) {
+                        // Places physiques : toujours accepter la mise a jour du serveur
+                        if (!spot.isPhysical && localStorage.getItem('force_spot_' + frontendId)) continue;
+                        let oldState = spot.state;
+                        let newState = (stateVal === 'OCCUPIED' || stateVal === 1) ? 'occupied' : (stateVal === 'ANOMALIE' || stateVal === -1) ? 'anomaly' : 'free';
+                        if (oldState !== newState) {
+                            spot.state = newState;
+                            addLog(spot.id, newState);
+                        }
+                    }
+                }
+                renderMap(); renderControls();
+            }
+        });
+
+        renderMap();
+        renderControls();
+    </script>
+</body>
+</html>

@@ -1,0 +1,241 @@
+from flask import Flask, render_template, jsonify
+from flask_socketio import SocketIO  
+import json
+import os
+import heapq
+import threading
+import time
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!' # Optionnel mais recommandé
+socketio = SocketIO(app, cors_allowed_origins="*") # <--- Il faut initialiser la variable socketio ici !
+
+# --- CONFIGURATION DES CHEMINS ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# On remonte d'un dossier (..) pour entrer dans 'server'
+SERVER_DIR = os.path.join(BASE_DIR, '..', 'server') 
+CONF_PATH = os.path.join(SERVER_DIR, 'conf_parking.json')
+ETAT_PATH = os.path.join(SERVER_DIR, 'etat_parking.json')
+
+def load_json(path):
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+# --- ALGORITHME A* ---
+def a_star(grid, start, goal):
+    rows, cols = len(grid), len(grid[0])
+    open_set = []
+    heapq.heappush(open_set, (0, start))
+    came_from = {}
+    g_score = {start: 0}
+    f_score = {start: abs(start[0]-goal[0]) + abs(start[1]-goal[1])}
+
+    while open_set:
+        current = heapq.heappop(open_set)[1]
+
+        if current == goal:
+            path = []
+            while current in came_from:
+                path.append({"row": current[0], "col": current[1]})
+                current = came_from[current]
+            path.append({"row": start[0], "col": start[1]})
+            return path[::-1]
+
+        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            neighbor = (current[0] + dr, current[1] + dc)
+            
+            if 0 <= neighbor[0] < rows and 0 <= neighbor[1] < cols:
+                # Une case est franchissable si c'est de la route (0), 
+                # l'entrée (98) ou la place de destination (goal)
+                is_walkable = (grid[neighbor[0]][neighbor[1]] == 0 or 
+                               grid[neighbor[0]][neighbor[1]] == 98 or 
+                               neighbor == goal)
+                
+                if is_walkable:
+                    tentative_g_score = g_score[current] + 1
+                    if tentative_g_score < g_score.get(neighbor, float('inf')):
+                        came_from[neighbor] = current
+                        g_score[neighbor] = tentative_g_score
+                        f_score[neighbor] = tentative_g_score + abs(neighbor[0]-goal[0]) + abs(neighbor[1]-goal[1])
+                        heapq.heappush(open_set, (f_score[neighbor], neighbor))
+    return []
+
+# --- ROUTES ---
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/admin')
+def admin():
+    return render_template('admin.html')
+
+@app.route('/api/data')
+def get_parking_data():
+    try:
+        conf = load_json(CONF_PATH)
+        etat_complet = load_json(ETAT_PATH)
+        
+        grid = conf.get('grid', [])
+        # On récupère le dictionnaire des places soit dans .places, soit à la racine
+        etat_places = etat_complet.get("places", etat_complet)
+        
+        if not grid:
+            return jsonify({"error": "Grille non trouvée dans conf_parking.json"}), 500
+
+        # 1. Localisation dynamique de l'entrée (98) et des places (10-90)
+        entry_coords = None
+        spots_coords = {}
+        
+        for r in range(len(grid)):
+            for c in range(len(grid[r])):
+                val = grid[r][c]
+                if val == 98:
+                    entry_coords = (r, c)
+                elif 10 <= val <= 90 and val != 99:
+                    spots_coords[str(val)] = (r, c)
+
+        # Sécurité si 98 n'est pas dans la grille
+        if not entry_coords:
+            meta = conf.get('metadata', {}).get('entry_point', {"row": 0, "col": 0})
+            entry_coords = (meta['row'], meta['col'])
+
+        # 2. Recherche de la meilleure place libre
+        free_spots = [s for s, status in etat_places.items() if status == "FREE"]
+        best_path = []
+        best_spot = None
+        
+        if free_spots and entry_coords:
+            shortest_len = float('inf')
+            for spot_id in free_spots:
+                if spot_id in spots_coords:
+                    goal = spots_coords[spot_id]
+                    path = a_star(grid, entry_coords, goal)
+                    
+                    if path and len(path) < shortest_len:
+                        shortest_len = len(path)
+                        best_path = path
+                        best_spot = spot_id
+        
+        return jsonify({
+            "grid": grid,
+            "status": etat_places,
+            "places": etat_places,
+            "best_spot": best_spot,
+            "path": best_path,
+            "metadata": conf.get('metadata', {}),
+            "layout": conf.get('layout', {})
+        })
+
+    except Exception as e:
+        print(f"❌ Erreur Serveur : {e}")
+        return jsonify({"error": str(e)}), 500
+
+def surveiller_etat():
+    dernier_etat = None
+    print("[Thread] Surveillance de etat_parking.json demarree")
+    while True:
+        try:
+            etat_actuel = load_json(ETAT_PATH)
+            if etat_actuel != dernier_etat:
+                dernier_etat = etat_actuel
+                conf = load_json(CONF_PATH)
+                etat_places = etat_actuel.get("places", etat_actuel)
+                grid = conf.get("grid", [])
+                entry_coords = None
+                spots_coords = {}
+                for r in range(len(grid)):
+                    for c in range(len(grid[r])):
+                        val = grid[r][c]
+                        if val == 98:
+                            entry_coords = (r, c)
+                        elif 10 <= val <= 90 and val != 99:
+                            spots_coords[str(val)] = (r, c)
+                if not entry_coords:
+                    meta = conf.get('metadata', {}).get('entry_point', {"row": 0, "col": 0})
+                    entry_coords = (meta['row'], meta['col'])
+                free_spots = [s for s, status in etat_places.items() if status == "FREE"]
+                best_path = []
+                best_spot = None
+                if free_spots and entry_coords:
+                    shortest_len = float('inf')
+                    for spot_id in free_spots:
+                        if spot_id in spots_coords:
+                            goal = spots_coords[spot_id]
+                            path = a_star(grid, entry_coords, goal)
+                            if path and len(path) < shortest_len:
+                                shortest_len = len(path)
+                                best_path = path
+                                best_spot = spot_id
+                donnees = {
+                    "grid": grid,
+                    "status": etat_places,
+                    "places": etat_places,
+                    "best_spot": best_spot,
+                    "path": best_path,
+                    "metadata": conf.get('metadata', {}),
+                    "layout": conf.get('layout', {})
+                }
+                socketio.emit("update_data", donnees)
+                print(f"[SocketIO] Mise a jour envoyee aux clients")
+        except Exception as e:
+            print(f"[Thread] Erreur : {e}")
+        time.sleep(1)
+
+@socketio.on('connect')
+def on_connect():
+    print("[SocketIO] Nouveau client connecte")
+    try:
+        conf = load_json(CONF_PATH)
+        etat_complet = load_json(ETAT_PATH)
+        grid = conf.get('grid', [])
+        etat_places = etat_complet.get("places", etat_complet)
+        entry_coords = None
+        spots_coords = {}
+        for r in range(len(grid)):
+            for c in range(len(grid[r])):
+                val = grid[r][c]
+                if val == 98:
+                    entry_coords = (r, c)
+                elif 10 <= val <= 90 and val != 99:
+                    spots_coords[str(val)] = (r, c)
+        if not entry_coords:
+            meta = conf.get('metadata', {}).get('entry_point', {"row": 0, "col": 0})
+            entry_coords = (meta['row'], meta['col'])
+        free_spots = [s for s, status in etat_places.items() if status == "FREE"]
+        best_path = []
+        best_spot = None
+        if free_spots and entry_coords:
+            shortest_len = float('inf')
+            for spot_id in free_spots:
+                if spot_id in spots_coords:
+                    goal = spots_coords[spot_id]
+                    path = a_star(grid, entry_coords, goal)
+                    if path and len(path) < shortest_len:
+                        shortest_len = len(path)
+                        best_path = path
+                        best_spot = spot_id
+        donnees = {
+            "grid": grid,
+            "status": etat_places,
+            "places": etat_places,
+            "best_spot": best_spot,
+            "path": best_path,
+            "metadata": conf.get('metadata', {}),
+            "layout": conf.get('layout', {})
+        }
+        socketio.emit("update_data", donnees)
+    except Exception as e:
+        print(f"[SocketIO] Erreur envoi initial : {e}")
+
+@socketio.on('disconnect')
+def on_disconnect():
+    print("[SocketIO] Client deconnecte")
+
+if __name__ == '__main__':
+    thread = threading.Thread(target=surveiller_etat, daemon=True)
+    thread.start()
+    # Le parametre host='0.0.0.0' est OBLIGATOIRE
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)

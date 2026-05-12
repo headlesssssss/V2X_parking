@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartPark Navigation V2X - Conducteur</title>
+    <script src="/static/tailwind.min.css"></script>
+    <script src="/static/phosphor.js"></script>
+    <script src="/static/socket.io.min.js"></script>
+    <style>
+        :root {
+            --bg-body: #0f172a; --text-main: #ffffff;
+            --bg-glass: rgba(30, 41, 59, 0.7); --border-glass: rgba(255, 255, 255, 0.1);
+            --bg-map: #1e293b; --border-map: #334155;
+            --text-muted: #94a3b8; --bg-panel: #1e293b;
+        }
+        .theme-light {
+            --bg-body: #f8fafc; --text-main: #0f172a;
+            --bg-glass: rgba(255, 255, 255, 0.85); --border-glass: rgba(0, 0, 0, 0.1);
+            --bg-map: #e2e8f0; --border-map: #cbd5e1;
+            --text-muted: #64748b; --bg-panel: #ffffff;
+        }
+
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: var(--bg-body); color: var(--text-main); overflow-x: hidden; user-select: none; transition: background-color 0.4s ease, color 0.4s ease; }
+        .glass-panel { background: var(--bg-glass); backdrop-filter: blur(12px); border: 1px solid var(--border-glass); transition: background 0.4s ease, border 0.4s ease; }
+        .instruction-box { box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5); }
+        .theme-light .instruction-box { box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.1); }
+
+        .map-wrapper { width: 100%; display: flex; justify-content: center; align-items: flex-start; padding: 10px 0; perspective: 1200px; position: relative; }
+        #map-scaler { transform-origin: top center; transition: transform 0.3s ease; }
+        @media (max-width: 1280px) { #map-scaler { transform: scale(0.85); margin-bottom: -67px; } }
+        @media (max-width: 850px) { #map-scaler { transform: scale(0.65); margin-bottom: -157px; } }
+        @media (max-width: 600px) { #map-scaler { transform: scale(0.45); margin-bottom: -247px; } }
+        @media (max-width: 400px) { #map-scaler { transform: scale(0.35); margin-bottom: -292px; } }
+
+        #map-container { 
+            position: relative; width: 800px; min-width: 800px; height: 450px; min-height: 450px; 
+            background-color: var(--bg-map); border-radius: 12px; 
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(0,0,0,0.3); border: 4px solid var(--border-map); 
+            transform-style: preserve-3d; --rotX: 55deg; --rotZ: 0deg; transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.4s, border-color 0.4s; 
+        }
+        .theme-light #map-container { box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), inset 0 0 20px rgba(255,255,255,0.5); }
+        #map-container.no-transition { transition: none !important; }
+        #map-container.view-3d { transform: translateY(20px) rotateX(var(--rotX)) rotateZ(var(--rotZ)); box-shadow: 0 60px 40px -20px rgba(0,0,0,0.8), inset 0 0 20px rgba(0,0,0,0.3); cursor: grab; }
+        .theme-light #map-container.view-3d { box-shadow: 0 60px 40px -20px rgba(0,0,0,0.2), inset 0 0 20px rgba(255,255,255,0.5); }
+        #map-container.view-3d:active { cursor: grabbing; }
+        #map-container.view-3d .building-block { transform: translateZ(40px) rotateZ(calc(var(--rotZ) * -1)) rotateX(calc(var(--rotX) * -1)); box-shadow: 0 15px 20px rgba(0,0,0,0.6); }
+        .theme-light #map-container.view-3d .building-block { box-shadow: 0 15px 20px rgba(0,0,0,0.2); }
+        #map-container.view-3d .spot span { transform: translateZ(5px) rotateZ(calc(var(--rotZ) * -1)) rotateX(calc(var(--rotX) * -1)); display: inline-block; }
+        .car-wrapper { display: flex; justify-content: center; align-items: center; width: 100%; height: 100%; transition: transform 0.6s ease, filter 0.6s ease; }
+        #map-container.view-3d .car-wrapper { transform: translateZ(25px) rotateZ(calc(var(--rotZ) * -1)) rotateX(calc(var(--rotX) * -1)); filter: drop-shadow(0 15px 10px rgba(0,0,0,0.6)); }
+
+        .road-line-horizontal { position: absolute; top: 225px; left: 20px; width: 760px; height: 4px; background-image: linear-gradient(to right, transparent 50%, rgba(255, 255, 255, 0.3) 50%); background-size: 40px 100%; pointer-events: none; transform: translateZ(1px); }
+        .theme-light .road-line-horizontal { background-image: linear-gradient(to right, transparent 50%, rgba(0, 0, 0, 0.15) 50%); }
+
+        .spot { position: absolute; width: 60px; height: 90px; border: 3px solid rgba(255,255,255,0.4); display: flex; justify-content: center; align-items: center; transition: background-color 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease; box-sizing: border-box; background-color: var(--bg-glass); transform-style: preserve-3d; }
+        .theme-light .spot { border: 3px solid rgba(0,0,0,0.1); }
+        .spot.top-row { border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+        .spot.bottom-row { border-top: none; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+        .spot.free { background-color: rgba(16, 185, 129, 0.1); border-color: #10b981; }
+        .spot.occupied { background-color: rgba(239, 68, 68, 0.15); border-color: #ef4444; }
+        .spot.target { background-color: rgba(6, 182, 212, 0.2); border-color: #06b6d4; box-shadow: 0 0 15px rgba(6, 182, 212, 0.5); animation: pulse-target 2s infinite; }
+        @keyframes pulse-target { 0% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.4); } 70% { box-shadow: 0 0 0 15px rgba(6, 182, 212, 0); } 100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0); } }
+
+        .car-icon { font-size: 32px; color: #ef4444; transition: transform 0.3s ease; }
+        .spot.vertical.top-row .car-icon { transform: rotate(180deg); }
+        .spot.vertical.bottom-row .car-icon { transform: rotate(0deg); }
+        .spot.horizontal .car-icon { transform: rotate(90deg); } 
+
+        #route-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; transform: translateZ(2px); }
+        .route-path { fill: none; stroke: #0ea5e9; stroke-width: 12; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0px 0px 8px rgba(14, 165, 233, 0.8)); stroke-dasharray: 1500; stroke-dashoffset: 1500; animation: drawPath 1.5s ease forwards; }
+        @keyframes drawPath { to { stroke-dashoffset: 0; } }
+
+        .building-block { position: absolute; background: #9a3412; color: white; font-weight: bold; display: flex; justify-content: center; align-items: center; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); letter-spacing: 1px; z-index: 2; transition: transform 0.6s ease, box-shadow 0.6s ease; }
+        .theme-light .building-block { box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        #hall-ensaj { top: 10px; left: 320px; width: 160px; height: 50px; font-size: 18px; }
+        #entree-main { bottom: 10px; left: 350px; width: 100px; height: 40px; font-size: 16px; }
+        
+        .dynamic-text { color: var(--text-main); }
+        .dynamic-muted { color: var(--text-muted); }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen overflow-y-auto">
+
+    <header class="p-4 z-20 flex justify-between items-center shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="bg-gradient-to-br from-cyan-500 to-blue-600 p-2 rounded-xl shadow-lg shadow-cyan-500/30">
+                <i class="ph-fill ph-steering-wheel text-3xl text-white"></i>
+            </div>
+            <div>
+                <h1 class="font-black text-xl tracking-wide dynamic-text">SmartPark<span class="text-cyan-400">.</span></h1>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <button onclick="toggleTheme()" class="glass-panel text-amber-400 text-sm font-bold px-3 py-2 rounded-xl flex items-center transition-colors shadow-lg">
+                <i id="theme-icon" class="ph-bold ph-sun text-xl"></i>
+            </button>
+            <button onclick="toggle3D()" id="btn-3d" class="glass-panel dynamic-text text-sm font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors shadow-lg">
+                <i class="ph-bold ph-cube text-cyan-400"></i> Mode 3D
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 flex flex-col items-center p-2 md:p-4 relative w-full min-h-full">
+        
+        <div id="instruction-wrapper" class="w-full max-w-2xl mx-auto text-center z-30 mb-4 mt-2 transition-opacity duration-300">
+            <div class="inline-flex items-center gap-4 glass-panel instruction-box py-4 px-8 rounded-full border border-slate-700/50">
+                <div id="direction-icon" class="bg-slate-800 p-3 rounded-full text-cyan-400 border border-slate-700">
+                    <i class="ph-bold ph-arrow-u-up-left text-2xl"></i>
+                </div>
+                <p id="instruction-text" class="text-xl md:text-2xl font-bold dynamic-text tracking-wide">
+                    En attente de connexion...
+                </p>
+            </div>
+        </div>
+
+        <div id="drag-hint" class="fixed top-36 left-1/2 transform -translate-x-1/2 bg-black/80 text-white px-6 py-2 rounded-full text-sm font-semibold opacity-0 transition-opacity duration-500 pointer-events-none z-50 flex items-center gap-2 shadow-xl border border-slate-700">
+            <i class="ph-bold ph-hand-grabbing text-xl text-cyan-400"></i> Glissez pour tourner la carte
+        </div>
+
+        <div class="map-wrapper flex-1 w-full mb-8">
+            <div id="map-scaler">
+                <div id="map-container">
+                    <div class="road-line-horizontal"></div>
+                    <div id="hall-ensaj" class="building-block">Hall ENSAJ</div>
+                    <div id="entree-main" class="building-block">Entrée</div>
+                    <svg id="route-layer"></svg>
+                </div>
+            </div>
+        </div>
+
+        <div class="w-full max-w-5xl mx-auto mt-4 mb-8 px-4 z-30 shrink-0">
+            <div class="glass-panel rounded-3xl p-4 md:p-6 flex flex-wrap lg:flex-nowrap justify-between items-center gap-4 shadow-2xl">
+                
+                <!-- Heure seule (Météo supprimée) -->
+                <div class="flex items-center px-4 lg:border-r border-slate-700/50 w-full lg:w-auto justify-center">
+                    <div class="text-center">
+                        <div class="text-[10px] font-bold dynamic-muted uppercase tracking-widest mb-1">Heure locale</div>
+                        <div id="clock" class="text-3xl font-black dynamic-text">12:00</div>
+                    </div>
+                </div>
+
+                <div class="flex-1 flex justify-center gap-6 lg:gap-10 px-4 w-full lg:w-auto">
+                    <div class="text-center">
+                        <div class="text-xs font-semibold dynamic-muted uppercase tracking-wider mb-1">Destination</div>
+                        <div id="driver-dest" class="text-xl font-bold text-cyan-400">--</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xs font-semibold dynamic-muted uppercase tracking-wider mb-1">Distance</div>
+                        <div id="driver-dist" class="text-xl font-bold dynamic-text">-- cm</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xs font-semibold dynamic-muted uppercase tracking-wider mb-1">Temps</div>
+                        <div id="driver-eta" class="text-xl font-bold dynamic-text">--</div>
+                    </div>
+                </div>
+
+                <div class="px-4 w-full lg:w-auto flex justify-center mt-4 lg:mt-0 gap-3">
+                    <button onclick="findNewSpot()" class="bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-500 border border-cyan-500/50 px-5 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-cyan-500/20">
+                        <i class="ph-bold ph-magnifying-glass"></i> Chercher
+                    </button>
+                    <button onclick="cancelNavigation()" class="bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30 px-5 py-3 rounded-xl font-bold flex items-center gap-2 transition-all">
+                        <i class="ph-bold ph-x"></i> Annuler
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // THEME
+        let isLight = false;
+        function toggleTheme() {
+            isLight = !isLight;
+            if(isLight) {
+                document.body.classList.add('theme-light');
+                document.getElementById('theme-icon').className = "ph-bold ph-moon text-xl text-indigo-500";
+            } else {
+                document.body.classList.remove('theme-light');
+                document.getElementById('theme-icon').className = "ph-bold ph-sun text-xl text-amber-400";
+            }
+        }
+
+        setInterval(() => {
+            document.getElementById('clock').innerText = new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'});
+        }, 1000);
+
+        let is3D = false; let isDragging = false; let startX = 0, startY = 0; let rotX = 55, rotZ = 0;
+        const mapContainer = document.getElementById('map-container');
+        const dragHint = document.getElementById('drag-hint');
+
+        function toggle3D() {
+            is3D = !is3D;
+            const btn = document.getElementById('btn-3d');
+            if (is3D) {
+                rotX = 55; rotZ = 0;
+                mapContainer.style.setProperty('--rotX', `${rotX}deg`);
+                mapContainer.style.setProperty('--rotZ', `${rotZ}deg`);
+                mapContainer.classList.add('view-3d');
+                btn.innerHTML = '<i class="ph-bold ph-squares-four text-cyan-400"></i> Mode 2D';
+                dragHint.style.opacity = '1'; setTimeout(() => dragHint.style.opacity = '0', 4000);
+            } else {
+                mapContainer.classList.remove('view-3d');
+                btn.innerHTML = '<i class="ph-bold ph-cube text-cyan-400"></i> Mode 3D';
+            }
+        }
+
+        mapContainer.addEventListener('pointerdown', (e) => {
+            if (!is3D) return; isDragging = true; startX = e.clientX; startY = e.clientY;
+            mapContainer.classList.add('no-transition'); mapContainer.setPointerCapture(e.pointerId); 
+        });
+        mapContainer.addEventListener('pointermove', (e) => {
+            if (!isDragging || !is3D) return;
+            const deltaX = e.clientX - startX; const deltaY = e.clientY - startY;
+            rotZ -= deltaX * 0.4; rotX -= deltaY * 0.4; rotX = Math.max(20, Math.min(80, rotX));
+            mapContainer.style.setProperty('--rotX', `${rotX}deg`); mapContainer.style.setProperty('--rotZ', `${rotZ}deg`);
+            startX = e.clientX; startY = e.clientY;
+        });
+        mapContainer.addEventListener('pointerup', (e) => {
+            isDragging = false; mapContainer.classList.remove('no-transition'); mapContainer.releasePointerCapture(e.pointerId);
+        });
+
+        const spots = [];
+        const topY = 20; const bottomY = 340;
+        let startPosX = 30;
+        for(let i=1; i<=4; i++) { spots.push({ id: `P${i}`, row: 'top', orientation: 'horizontal', x: startPosX, y: topY, state: 'free', isPhysical: i===4 }); startPosX += 70; }
+        startPosX = 500;
+        for(let i=5; i<=8; i++) { spots.push({ id: `P${i}`, row: 'top', orientation: 'vertical', x: startPosX, y: topY, state: 'free', isPhysical: i===8 }); startPosX += 70; }
+        startPosX = 30;
+        for(let i=9; i<=12; i++) { spots.push({ id: `P${i}`, row: 'bottom', orientation: 'vertical', x: startPosX, y: bottomY, state: 'free', isPhysical: i===9 }); startPosX += 70; }
+        startPosX = 500;
+        for(let i=13; i<=16; i++) { spots.push({ id: `P${i}`, row: 'bottom', orientation: 'horizontal', x: startPosX, y: bottomY, state: 'free', isPhysical: i===14 }); startPosX += 70; }
+
+        const entranceX = 400; const entranceY = 450; const roadCenterY = 225; 
+        const spotWidth = 60; const spotHeight = 90;
+        const routeLayer = document.getElementById('route-layer');
+        const instructionText = document.getElementById('instruction-text');
+        const dirIcon = document.getElementById('direction-icon');
+        let navigationCanceled = false;
+
+        function renderMap() {
+            document.querySelectorAll('.spot').forEach(e => e.remove());
+            spots.forEach(spot => {
+                const el = document.createElement('div');
+                const rowClass = spot.row === 'top' ? 'top-row' : 'bottom-row';
+                el.className = `spot ${rowClass} ${spot.orientation} ${spot.state}`;
+                el.style.left = `${spot.x}px`; el.style.top = `${spot.y}px`;
+
+                if (spot.state === 'occupied') {
+                    el.innerHTML = `<div class="car-wrapper"><i class="ph-fill ph-car car-icon"></i></div>`;
+                } else {
+                    el.innerHTML = `<span class="font-bold text-lg ${spot.state === 'target' ? 'text-cyan-400' : 'text-emerald-500'}">${spot.id}</span>`;
+                }
+                mapContainer.appendChild(el);
+            });
+        }
+
+        function calculateAndDrawRoute() {
+            if (navigationCanceled) return;
+
+            routeLayer.innerHTML = ''; 
+            const availableSpots = spots.filter(s => s.state === 'free' || s.state === 'target');
+            spots.forEach(s => { if(s.state === 'target') s.state = 'free' });
+
+            if (availableSpots.length === 0) {
+                instructionText.innerHTML = `Parking Complet`;
+                instructionText.className = "text-xl md:text-2xl font-bold text-red-500 tracking-wide";
+                dirIcon.innerHTML = `<i class="ph-bold ph-prohibit text-2xl text-red-500"></i>`;
+                document.getElementById('driver-dest').innerText = "--";
+                document.getElementById('driver-dist').innerText = "--";
+                document.getElementById('driver-eta').innerText = "--";
+                renderMap(); return;
+            }
+
+            availableSpots.sort((a, b) => {
+                let distA = Math.abs(entranceX - (a.x + spotWidth/2)) + Math.abs(entranceY - a.y);
+                let distB = Math.abs(entranceX - (b.x + spotWidth/2)) + Math.abs(entranceY - b.y);
+                return distA - distB;
+            });
+            
+            const targetSpot = availableSpots[0];
+            targetSpot.state = 'target'; 
+
+            const startX = entranceX; const startY = entranceY;
+            const intersectionY = roadCenterY; const endX = targetSpot.x + (spotWidth / 2);
+            let endY = targetSpot.row === 'top' ? targetSpot.y + spotHeight - 20 : targetSpot.y + 20; 
+
+            // --- CALCUL DE LA DISTANCE A L'ECHELLE DE LA MAQUETTE ---
+            const distancePixels = Math.abs(intersectionY - startY) + Math.abs(endX - startX) + Math.abs(endY - intersectionY);
+            
+            // 800 pixels sur l'écran = 70 cm sur la vraie maquette
+            const scaleFactor = 70 / 800; 
+            const distanceCm = Math.round(distancePixels * scaleFactor);
+            
+            // On estime que la petite voiture roule è  environ 5 cm par seconde
+            const timeSeconds = Math.max(1, Math.round(distanceCm / 5)); 
+
+            document.getElementById('driver-dest').innerText = targetSpot.id;
+            document.getElementById('driver-dist').innerText = `${distanceCm} cm`; // Affichage en cm
+            document.getElementById('driver-eta').innerText = `${timeSeconds} s`;  // Affichage en secondes
+
+            const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+            polyline.setAttribute('class', 'route-path');
+            polyline.setAttribute('points', `${startX},${startY} ${startX},${intersectionY} ${endX},${intersectionY} ${endX},${endY}`);
+            
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', endX); circle.setAttribute('cy', endY);
+            circle.setAttribute('r', '8'); circle.setAttribute('fill', '#0ea5e9');
+            circle.setAttribute('stroke', 'white'); circle.setAttribute('stroke-width', '2');
+            circle.style.animation = 'drawPath 1s ease forwards'; circle.style.opacity = '0';
+            setTimeout(() => circle.style.opacity = '1', 800); 
+
+            routeLayer.appendChild(polyline); routeLayer.appendChild(circle);
+
+            const isLeft = targetSpot.x < entranceX;
+            instructionText.innerHTML = `Avancez puis tournez è  <span class="text-cyan-500">${isLeft ? 'gauche' : 'droite'}</span>`;
+            instructionText.className = "text-xl md:text-2xl font-bold dynamic-text tracking-wide";
+            dirIcon.innerHTML = `<i class="ph-bold ${isLeft ? 'ph-arrow-u-up-left' : 'ph-arrow-u-up-right'} text-2xl"></i>`;
+            
+            renderMap();
+        }
+
+        function cancelNavigation() {
+            navigationCanceled = true; 
+            routeLayer.innerHTML = '';
+            spots.forEach(s => { if(s.state === 'target') s.state = 'free' });
+            
+            instructionText.innerHTML = `Navigation annulée.`;
+            instructionText.className = "text-xl md:text-2xl font-bold text-red-500 tracking-wide";
+            dirIcon.innerHTML = `<i class="ph-bold ph-x-circle text-2xl text-red-500"></i>`;
+            
+            document.getElementById('driver-dest').innerText = "--";
+            document.getElementById('driver-dist').innerText = "--";
+            document.getElementById('driver-eta').innerText = "--";
+            
+            renderMap();
+        }
+
+        function findNewSpot() {
+            navigationCanceled = false; 
+            calculateAndDrawRoute();
+        }
+
+        window.addEventListener('storage', (e) => {
+            if (e.key && e.key.startsWith('force_spot_')) {
+                let id = e.key.replace('force_spot_', '');
+                let spot = spots.find(s => s.id === id);
+                if(spot) {
+                    spot.state = e.newValue;
+                    if(!navigationCanceled) calculateAndDrawRoute();
+                }
+            }
+            if (e.key === 'clear_all_spots') {
+                spots.forEach(s => s.state = 'free');
+                if(!navigationCanceled) calculateAndDrawRoute();
+            }
+            if (e.key === 'randomize_spots') {
+                spots.forEach(s => {
+                    let val = localStorage.getItem('force_spot_' + s.id);
+                    if (val) s.state = val;
+                });
+                if(!navigationCanceled) calculateAndDrawRoute();
+            }
+        });
+
+        spots.forEach(s => {
+            let forced = localStorage.getItem('force_spot_' + s.id);
+            if (forced) s.state = forced;
+        });
+
+        const socket = io();
+        socket.on('update_data', function(msg) {
+            if(msg && msg.places) {
+                let changed = false;
+                for (const [rawId, stateVal] of Object.entries(msg.places)) {
+                    let frontendId = rawId.toString();
+                    if(frontendId.startsWith('1') && frontendId.length === 2) {
+                        frontendId = 'P' + (parseInt(frontendId) - 10);
+                    } else if(frontendId.startsWith('2') && frontendId.length === 2) {
+                        frontendId = 'P' + (parseInt(frontendId) - 20 + 8);
+                    }
+
+                    let spot = spots.find(s => s.id === frontendId);
+                    if(spot) {
+                        // Places physiques : toujours mises a jour par le serveur
+                        if (!spot.isPhysical && localStorage.getItem('force_spot_' + frontendId)) continue;
+                        let newState = (stateVal === 'OCCUPIED' || stateVal === 1) ? 'occupied' : (stateVal === 'ANOMALIE' || stateVal === -1) ? 'anomaly' : 'free';
+                        if(spot.state !== newState && spot.state !== 'target') {
+                            spot.state = newState; changed = true;
+                        } else if (spot.state === 'target' && newState === 'occupied') {
+                            spot.state = 'occupied'; changed = true;
+                        }
+                    }
+                }
+                if(changed && !navigationCanceled) {
+                    calculateAndDrawRoute();
+                }
+            }
+        });
+
+        calculateAndDrawRoute();
+    </script>
+</body>
+</html>
